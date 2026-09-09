@@ -12,6 +12,7 @@ const SHOTS = process.env.SHOTS || require('os').tmpdir() + '/apv-shots/'; requi
   await page.goto(url);
   await page.waitForTimeout(500);
   if (await page.$('#fr-demo')) { await page.click('#fr-demo'); await page.waitForTimeout(500); }
+  if (await page.$('#cu-keep')) { await page.click('#cu-keep'); await page.waitForTimeout(300); }
   await page.screenshot({ path: SHOTS + 'plan.png', fullPage: true });
   // KPI values
   console.log('KPIs:', await page.$$eval('.kpi', els => els.map(e => e.querySelector('.k').textContent + ': ' + e.querySelector('.v').textContent)));
@@ -112,6 +113,7 @@ const SHOTS = process.env.SHOTS || require('os').tmpdir() + '/apv-shots/'; requi
 
   // reload persistence
   await page.reload(); await page.waitForTimeout(500);
+  if (await page.$('#cu-keep')) { await page.click('#cu-keep'); await page.waitForTimeout(300); }
   console.log('after reload tab:', await page.$eval('#tabs button.active', b => b.dataset.tab), 'recipes:', await page.evaluate(() => Store.state.recipes.length));
   await page.click('#tabs button[data-tab="plan"]'); await page.waitForTimeout(400);
   await page.screenshot({ path: SHOTS + 'plan_final.png', fullPage: true });

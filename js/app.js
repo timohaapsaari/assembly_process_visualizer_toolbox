@@ -20,8 +20,21 @@
     const box = UI.modal('<h2>Welcome</h2><p>No data in this browser yet. How do you want to start?</p>' +
       '<div class="grid-2 mt"><div class="panel" style="margin:0"><h3>Explore the demo</h3><p class="muted small">A hydraulic actuator with sub-assemblies, curing chambers, test chambers, worker pools, yields and a plan. Good for seeing how everything fits together. You can clear it later.</p><button class="btn btn-primary" id="fr-demo">Load demo data</button></div>' +
       '<div class="panel" style="margin:0"><h3>Start empty</h3><p class="muted small">Build your own product: set the calendar, import or enter parts and resources, then build the recipe. The help (?) has a step-by-step flow for large structures.</p><button class="btn" id="fr-empty">Start with an empty workspace</button></div></div>');
-    box.querySelector('#fr-demo').addEventListener('click', () => { Store.clearAll(); Store.loadDemo(); Store.save(); UI.closeModal(); App.showTab('plan'); });
+    box.querySelector('#fr-demo').addEventListener('click', () => { Store.clearAll(); Store.loadDemo(); Store.state.settings.cleanupOffered = true; Store.save(); UI.closeModal(); App.showTab('plan'); });
     box.querySelector('#fr-empty').addEventListener('click', () => { Store.save(); UI.closeModal(); App.showTab('settings'); UI.toast('Empty workspace. Start with the calendar, then Resources and Parts.', 'ok', 5000); });
+  };
+
+  /** Old demo / test data still in this browser: offer to clear it once. */
+  App.offerCleanup = function () {
+    const st = Store.state;
+    if (st.settings.cleanupOffered) return;
+    const looksLikeDemo = st.recipes.some(r => /HA-200/i.test(r.name)) || st.plans.some(p => /Order 4711/i.test(p.name)) || st.parts.some(p => p.itemNr === 'F-4001' && /HA-200/i.test(p.name));
+    if (!looksLikeDemo) { st.settings.cleanupOffered = true; Store.save(); return; }
+    const box = UI.modal('<h2>Old demo data found</h2><p>This browser still holds the demo / test data (' + st.parts.length + ' parts, ' + st.resources.length + ' resources, ' + st.recipes.length + ' recipe(s), ' + st.plans.length + ' plan(s)). Clear it for a fresh start?</p>' +
+      '<p class="muted small">Clearing keeps the shop calendar and holidays. You can download a JSON backup first from Import / Export.</p>' +
+      '<div class="modal-actions"><button class="btn" id="cu-keep">Keep it</button><button class="btn btn-danger" id="cu-clear">Clear all data</button></div>');
+    box.querySelector('#cu-keep').addEventListener('click', () => { st.settings.cleanupOffered = true; Store.save(); UI.closeModal(); });
+    box.querySelector('#cu-clear').addEventListener('click', () => { Store.clearAll(); Store.state.settings.cleanupOffered = true; Store.save(); UI.closeModal(); App.showTab('resources'); UI.toast('Workspace cleared. Start with Calendar, Resources and Parts.', 'ok', 5000); });
   };
 
   App.help = function () {
@@ -50,7 +63,7 @@
     document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => App.showTab(b.dataset.tab)));
     document.getElementById('btnHelp').addEventListener('click', App.help);
     if (Store.state.firstRun) { delete Store.state.firstRun; App.firstRun(); }
-    else App.showTab(Store.state.ui.tab || 'plan');
+    else { App.showTab(Store.state.ui.tab || 'plan'); App.offerCleanup(); }
     let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if (Store.state.ui.tab === 'plan' && root.PlanUI.result) root.PlanUI.renderResult(root.PlanUI.result); }, 200); });
   });
 
