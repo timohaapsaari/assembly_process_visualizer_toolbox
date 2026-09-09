@@ -19,9 +19,12 @@ browser's localStorage and can be exported/imported as CSV or JSON. A first open
   can be in a process at once. **Defaults by step type** (e.g. test steps → test workers + test
   chambers, bonding → curing chambers) are applied to new and imported steps automatically and
   to existing recipes with one click.
-- **Recipe builder** – build the assembly process as steps. Each step *produces* an output part
-  and *uses* component parts with quantities; when a step uses the output of another step the
-  dependency is derived automatically (sub-assemblies flow into later steps). Per step:
+- **Recipe builder** – build the assembly process as steps. A step either *produces* a new item
+  from component parts, or *continues from the previous step* (dispensing, curing, testing…) and
+  works on that step's item; only the step that creates an item has to name it. When a step
+  uses the output of another step the dependency is derived automatically (sub-assemblies flow
+  into later steps). Recipes chain: a component that is the final product of another recipe
+  pulls that recipe's steps into the plan, recursively. Per step:
   - work time per unit (labor minutes) and number of workers from a worker pool
     (elapsed = per-unit × qty ÷ workers)
   - fixed time per lot (setup, loading, test rig)
@@ -108,7 +111,8 @@ test/e2e.js         browser smoke test (node test/e2e.js, needs playwright)
 
 `steps.csv`: `recipe, step_nr, step_name, step_type, output_item_nr, components, work_minutes,
 workers, worker_pool, fixed_minutes, process_hours, resource, lot_size, transfer_per_lot,
-yield_pct, predecessors, notes` – `components` is `ITEM:qty|ITEM:qty`, `resource` and `worker_pool` are
+yield_pct, continues_previous, deliver_qty, predecessors, notes` – a row with no output and no
+components (other than the first row) is taken as continuing the previous step – `components` is `ITEM:qty|ITEM:qty`, `resource` and `worker_pool` are
 resource names (created if missing), `predecessors` lists extra step numbers. The older
 `cure_hours` header is accepted for `process_hours`.
 

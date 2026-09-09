@@ -69,7 +69,8 @@
       '<li><b>Calendar &amp; resources first.</b> Shifts, holidays, then worker pools and equipment with capacity and lot sizes, and the defaults by step type.</li>' +
       '<li><b>Parts from the ERP.</b> Import parts.csv with every purchased item and every sub-assembly item number. Lead times for purchased parts.</li>' +
       '<li><b>Work top-down from the final product.</b> Create the final assembly step first: output = final item, components = its top-level sub-assemblies and purchased parts. Then, for every sub-assembly component, add the step(s) that produce it, and so on down the tree. Each new step consumes parts already named, so no sub-assembly is left unused.</li>' +
-      '<li><b>Tests and cures as their own steps.</b> A test on the same item: input = output = the item, with yield %. A cure: process time on a curing resource, tick "next step per lot".</li>' +
+      '<li><b>Tests and cures as their own steps.</b> Tick "continues from previous step": the step works on the item of the step before it, and only the last step of such a chain (or the step that creates a new item) names an output. A test gets a yield %, a cure gets process time on a curing resource with "next step per lot".</li>' +
+      '<li><b>Several recipes chain automatically.</b> If a component is the final product of another recipe, that recipe\'s steps are included in the plan (prefixed with a short code).</li>' +
       '<li><b>One branch at a time.</b> Finish a sub-assembly branch, check the summary (lead time, critical path, warnings), then move to the next. Large trees are easier in a spreadsheet: fill steps.csv / bom.csv and import.</li>' +
       '<li><b>Renumber in process order</b> at the end (drag to order, then Renumber) and validate with a plan.</li></ol>' +
       '<h3>Data</h3><p>Everything is saved in this browser. Use Import / Export for CSV round-trips with your ERP and JSON backups.</p>' +

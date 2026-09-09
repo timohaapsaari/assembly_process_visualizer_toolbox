@@ -36,6 +36,7 @@
         { key: 'workerPool', label: 'Worker pool', aliases: ['workerpool', 'pool', 'team', 'laborpool', 'labourpool', 'crewname', 'tiimi', 'ryhmä'] },
         { key: 'transferPerLot', label: 'Successor may start per lot (yes/no)', aliases: ['transferperlot', 'transfer', 'transferbatch', 'overlap', 'perlot', 'siirtoerä', 'limitys'] },
         { key: 'yieldPct', label: 'Yield % (good units out)', aliases: ['yieldpct', 'yield', 'fpy', 'firstpassyield', 'passrate', 'goodrate', 'saanto', 'saantoprosentti', 'hyväksymisaste'] },
+        { key: 'continuesPrevious', label: 'Continues previous step (yes/no)', aliases: ['continuesprevious', 'continues', 'continue', 'continuation', 'chain', 'followsprevious', 'sameitem', 'jatkaa', 'jatko'] },
         { key: 'deliverQty', label: 'Delivered separately, pcs per product', aliases: ['deliverqty', 'deliver', 'deliverable', 'deliveredseparately', 'separatedelivery', 'qtyperproduct', 'erillistoimitus', 'toimitetaanerikseen'] },
         { key: 'predecessors', label: 'Extra predecessors (step nrs)', aliases: ['predecessors', 'predecessor', 'preds', 'after', 'dependson', 'depends', 'previous', 'prev', 'edeltäjät', 'edeltavat', 'edeltäjä'] },
         { key: 'notes', label: 'Notes', aliases: ['notes', 'note', 'comment', 'comments', 'remarks', 'instructions', 'huomautus', 'huom', 'ohje'] }
@@ -259,6 +260,8 @@
         if (M.predecessors) o._preds = String(getVal(r, M, 'predecessors') || '').split(/[|;,\s]+/).map(x => x.trim()).filter(Boolean);
         if (s) { Object.assign(s, o); report.updated++; }
         else { s = Store.newStep(Object.assign({ name: 'Step ' + nr }, o)); rc.steps.push(s); report.added++; }
+        if (M.continuesPrevious) s.continuesPrevious = /^(1|y|yes|true|x|k|kyllä|kylla)$/i.test(String(getVal(r, M, 'continuesPrevious') || '').trim());
+        else if (!s.outputPartId && !(s.components || []).length && rc.steps.indexOf(s) > 0) s.continuesPrevious = true;
         if (M.deliverQty && s.outputPartId) Store.setDeliverable(rc, s.outputPartId, U.num(getVal(r, M, 'deliverQty'), 0));
         if (Store.applyDefaults(s, false)) report.defaulted = (report.defaulted || 0) + 1;
       });
@@ -300,8 +303,9 @@
   /** Final part = output of a step that no other step consumes (prefer last step). */
   CSV.guessFinalPart = function (rc) {
     const consumed = new Set();
-    rc.steps.forEach(s => (s.components || []).forEach(c => { if (c.partId !== s.outputPartId) consumed.add(c.partId); }));
-    const cands = rc.steps.filter(s => s.outputPartId && !consumed.has(s.outputPartId));
+    const steps = Scheduler.resolveRecipe(rc).steps;
+    steps.forEach(s => (s.components || []).forEach(c => { if (c.partId !== s.outputPartId) consumed.add(c.partId); }));
+    const cands = steps.filter(s => s.outputPartId && !consumed.has(s.outputPartId));
     if (cands.length) rc.finalPartId = cands[cands.length - 1].outputPartId;
   };
 
@@ -321,11 +325,12 @@
       components: (s.components || []).map(c => (pb[c.partId] ? pb[c.partId].itemNr : '?') + ':' + c.qty).join('|'),
       work_minutes: s.workMinutes, workers: s.workers, worker_pool: rb[s.workerPoolId] ? rb[s.workerPoolId].name : '', fixed_minutes: s.fixedMinutes,
       process_hours: s.processHours, resource: rb[s.resourceId] ? rb[s.resourceId].name : '', lot_size: s.lotSize || '', transfer_per_lot: s.transferPerLot ? 'yes' : 'no', yield_pct: s.yieldPct == null ? 100 : s.yieldPct,
+      continues_previous: s.continuesPrevious ? 'yes' : 'no',
       deliver_qty: (() => { const d = (rc.deliverables || []).find(x => x.partId === s.outputPartId); return d ? d.qtyPerProduct : ''; })(),
       predecessors: (s.extraPreds || []).map(id => { const t = rc.steps.find(x => x.id === id); return t ? t.nr : ''; }).filter(Boolean).join(';'),
       notes: s.notes || ''
     })));
-    return U.toCSV(rows, ['recipe', 'step_nr', 'step_name', 'step_type', 'output_item_nr', 'components', 'work_minutes', 'workers', 'worker_pool', 'fixed_minutes', 'process_hours', 'resource', 'lot_size', 'transfer_per_lot', 'yield_pct', 'deliver_qty', 'predecessors', 'notes'].map(k => ({ key: k })), delim);
+    return U.toCSV(rows, ['recipe', 'step_nr', 'step_name', 'step_type', 'output_item_nr', 'components', 'work_minutes', 'workers', 'worker_pool', 'fixed_minutes', 'process_hours', 'resource', 'lot_size', 'transfer_per_lot', 'yield_pct', 'continues_previous', 'deliver_qty', 'predecessors', 'notes'].map(k => ({ key: k })), delim);
   };
   CSV.exportResources = function (delim) {
     return U.toCSV(Store.state.resources || [], [

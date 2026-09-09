@@ -316,4 +316,74 @@ t('pass-through chain: assembly -> dispensing -> curing -> testing on one item',
   assert.ok(res.rows.t.ES >= res.rows.c.EF - 60000);
   assert.ok(!res.warnings.length, JSON.stringify(res.warnings));
 });
+
+t('recipe chain: sub-recipes are pulled in through their final products', () => {
+  const partsC = Object.assign({}, parts, { a1: { id: 'a1', itemNr: 'A-1', name: 'Assembly 1', type: 'manufactured' }, a2: { id: 'a2', itemNr: 'A-2', name: 'Assembly 2', type: 'manufactured' } });
+  const rFinal = { id: 'rf', name: 'Final product', finalPartId: 'fin', steps: [{ id: 'f1', nr: 10, name: 'Final assembly', type: 'assembly', outputPartId: 'fin', components: [{ partId: 'a1', qty: 2 }, { partId: 'hous', qty: 1 }], workMinutes: 60, workers: 1 }] };
+  const rA1 = { id: 'ra1', name: 'Assembly 1', finalPartId: 'a1', steps: [{ id: 'g1', nr: 10, name: 'Build A1', type: 'subassembly', outputPartId: 'a1', components: [{ partId: 'a2', qty: 3 }], workMinutes: 30, workers: 1 }] };
+  const rA2 = { id: 'ra2', name: 'Assembly 2', finalPartId: 'a2', steps: [
+    { id: 'h1', nr: 10, name: 'Assembly', type: 'assembly', outputPartId: 'a2', components: [{ partId: 'seal', qty: 1 }], workMinutes: 10, workers: 1 },
+    { id: 'h2', nr: 20, name: 'Testing', type: 'test', outputPartId: 'a2', components: [{ partId: 'a2', qty: 1 }], workMinutes: 5, workers: 1, yieldPct: 50 }
+  ] };
+  const rx = S.expandRecipe(rFinal, [rFinal, rA1, rA2], partsC);
+  assert.strictEqual(rx.expanded, true);
+  assert.strictEqual(rx.steps.length, 4);
+  assert.deepStrictEqual(rx.subRecipes.map(x => x.code), ['A1', 'A2']);
+  const res = S.schedule({ recipe: rx, partsById: partsC, qty: 1, due: fri, planStart: mon, calendar: cal });
+  assert.strictEqual(res.rows['ra1:g1'].units, 2);
+  assert.strictEqual(res.rows['ra2:h2'].units, 12);  // 6 good needed / 50 %
+  assert.strictEqual(res.rows['ra2:h1'].units, 12);
+  assert.strictEqual(res.purchases.find(p => p.partId === 'seal').qty, 12);
+  assert.ok(!res.purchases.some(p => p.partId === 'a1' || p.partId === 'a2'));
+  assert.ok(res.rows.f1.ES >= res.rows['ra1:g1'].EF - 60000);
+  assert.ok(!res.warnings.length, JSON.stringify(res.warnings));
+  // unexpanded: assemblies look purchased
+  const plain = S.schedule({ recipe: rFinal, partsById: partsC, qty: 1, due: fri, planStart: mon, calendar: cal });
+  assert.ok(plain.purchases.some(p => p.partId === 'a1'));
+});
+
+t('continues-previous chain: only the last step names the item', () => {
+  const r11 = { id: 'r11', name: 'Chain2', finalPartId: 'fin', steps: [
+    { id: 'a', nr: 10, name: 'Assembly', type: 'assembly', outputPartId: null, components: [{ partId: 'hous', qty: 1 }, { partId: 'seal', qty: 2 }], workMinutes: 30, workers: 1 },
+    { id: 'd', nr: 20, name: 'Dispensing', type: 'bonding', outputPartId: null, components: [{ partId: 'seal', qty: 0.1 }], workMinutes: 5, workers: 1, continuesPrevious: true },
+    { id: 'c', nr: 30, name: 'Curing', type: 'bonding', outputPartId: null, components: [], workMinutes: 1, workers: 1, processHours: 12, resourceId: 'oven', continuesPrevious: true, transferPerLot: true },
+    { id: 't', nr: 40, name: 'Testing', type: 'test', outputPartId: 'fin', components: [], workMinutes: 10, workers: 1, yieldPct: 90, continuesPrevious: true }
+  ] };
+  const rr = S.resolveRecipe(r11);
+  assert.deepStrictEqual(rr.steps.map(s => s.outputPartId), ['fin', 'fin', 'fin', 'fin']);
+  assert.strictEqual(rr.steps[1].components[0].partId, 'fin');           // implicit input from step 10
+  assert.strictEqual(rr.steps[1].components.length, 2);                   // plus the adhesive
+  assert.strictEqual(rr.steps[3].chainNamedBy, null);                     // names it itself
+  assert.strictEqual(rr.steps[0].chainNamedBy, 40);
+  assert.strictEqual(r11.steps[0].outputPartId, null);                    // original untouched
+  const g = S.buildGraph(r11, parts);
+  assert.deepStrictEqual(g.order, ['a', 'd', 'c', 't']);
+  assert.ok(!g.warnings.length, JSON.stringify(g.warnings));
+  const res = S.schedule({ recipe: r11, partsById: parts, resourcesById: resources, qty: 9, due: fri, planStart: mon, calendar: cal });
+  assert.strictEqual(res.rows.a.units, 10);
+  assert.strictEqual(res.purchases.find(p => p.partId === 'hous').qty, 10);
+  assert.strictEqual(U.round(res.purchases.find(p => p.partId === 'seal').qty, 2), 21);  // 2×10 + 0.1×10
+});
+t('continues-previous chain without any item is reported', () => {
+  const r12 = { id: 'r12', name: 'Bad', finalPartId: 'fin', steps: [
+    { id: 'a', nr: 10, name: 'A', type: 'assembly', outputPartId: null, components: [{ partId: 'hous', qty: 1 }] },
+    { id: 'b', nr: 20, name: 'B', type: 'test', outputPartId: null, components: [], continuesPrevious: true }
+  ] };
+  const g = S.buildGraph(r12, parts);
+  assert.ok(g.warnings.some(w => w.level === 'error' && /no item/.test(w.text)));
+});
+t('chained sub-recipe with a continues chain resolves inside its own recipe', () => {
+  const partsC = Object.assign({}, parts, { a2: { id: 'a2', itemNr: 'A-2', name: 'Assembly 2', type: 'manufactured' } });
+  const rFinal = { id: 'rf', name: 'Final', finalPartId: 'fin', steps: [{ id: 'f1', nr: 10, name: 'Final assembly', type: 'assembly', outputPartId: 'fin', components: [{ partId: 'a2', qty: 1 }], workMinutes: 10, workers: 1 }] };
+  const rA2 = { id: 'ra2', name: 'Assembly 2', finalPartId: 'a2', steps: [
+    { id: 'h1', nr: 10, name: 'Assemble', type: 'assembly', outputPartId: null, components: [{ partId: 'seal', qty: 1 }], workMinutes: 10, workers: 1 },
+    { id: 'h2', nr: 20, name: 'Test', type: 'test', outputPartId: 'a2', components: [], workMinutes: 5, workers: 1, continuesPrevious: true }
+  ] };
+  const rx = S.expandRecipe(rFinal, [rFinal, rA2], partsC);
+  assert.strictEqual(rx.steps.length, 3);
+  const res = S.schedule({ recipe: rx, partsById: partsC, qty: 4, due: fri, planStart: mon, calendar: cal });
+  assert.ok(!res.warnings.length, JSON.stringify(res.warnings));
+  assert.strictEqual(res.rows['ra2:h1'].units, 4);
+  assert.strictEqual(res.rows['ra2:h1'].step.outputPartId, 'a2');
+});
 console.log('\n' + passed + ' tests passed' + (process.exitCode ? ', some FAILED' : ''));

@@ -77,9 +77,8 @@
     r.steps.forEach(s => list.appendChild(RecipesUI.stepCard(r, s)));
     const addStep = () => {
       const s = Store.newStep({ nr: Store.nextStepNr(r), name: '' });
-      // sensible default: consume previous step's output
-      const prev = r.steps[r.steps.length - 1];
-      if (prev && prev.outputPartId) s.components.push({ partId: prev.outputPartId, qty: 1 });
+      // default: continue on the previous step's item
+      if (r.steps.length) s.continuesPrevious = true;
       Store.applyDefaults(s, false);
       r.steps.push(s); Store.save();
       const card = RecipesUI.stepCard(r, s); list.appendChild(card);
@@ -109,7 +108,8 @@
       '</div>' +
       '<div class="body">' +
       '<div>' +
-      '<label class="f"><span>Produces (output part)</span><span class="out"></span></label>' +
+      '<label class="check" title="This step works on the item coming from the previous step (dispensing, curing, testing…). Leave Produces empty unless this step creates a new item or is the last step of the chain."><input type="checkbox" class="cont" ' + (s.continuesPrevious ? 'checked' : '') + '> continues from previous step</label>' +
+      '<label class="f mt"><span>Produces (output part)</span><span class="out"></span><span class="chain-info small muted"></span></label>' +
       '<label class="f mt"><span>Uses (components, qty per output unit)</span><div class="comps"></div><span class="addcomp"></span></label>' +
       '</div>' +
       '<div>' +
@@ -132,13 +132,16 @@
       '<div class="summary"></div><div class="deps"></div></div>');
     card.addEventListener('click', e => {
       const b = e.target.closest('button[data-deliver]'); if (!b) return;
-      const cur = ((r.deliverables || []).find(d => d.partId === s.outputPartId) || {}).qtyPerProduct || 1;
+      const outId = (Scheduler.resolveRecipe(r).steps.find(x => x.id === s.id) || s).outputPartId; if (!outId) return;
+      const cur = ((r.deliverables || []).find(d => d.partId === outId) || {}).qtyPerProduct || 1;
       const v = prompt('Pieces of this output delivered separately, per product:', cur);
       if (v === null) return;
-      Store.setDeliverable(r, s.outputPartId, U.num(v, 0)); Store.save(); RecipesUI.render();
+      Store.setDeliverable(r, outId, U.num(v, 0)); Store.save(); RecipesUI.render();
     });
 
     const refresh = () => RecipesUI.refresh();
+    const contI = card.querySelector('.cont');
+    contI.addEventListener('change', () => { s.continuesPrevious = contI.checked; Store.save(); renderComps(); refresh(); });
     const nrI = card.querySelector('.nr');
     nrI.addEventListener('change', () => { s.nr = U.num(nrI.value, s.nr); Store.save(); refresh(); });
     UI.bind(card.querySelector('.name'), s, 'name', 'text', refresh);
@@ -172,7 +175,7 @@
     UI.bind(card.querySelector('.notes'), s, 'notes');
 
     // output picker
-    const out = UI.partPicker({ value: s.outputPartId, placeholder: 'Output part (item nr or name)…', onPick: p => {
+    const out = UI.partPicker({ value: s.outputPartId, placeholder: s.continuesPrevious ? 'leave empty to keep the chain item…' : 'Output part (item nr or name)…', onPick: p => {
       s.outputPartId = p.id;
       if (p.type !== 'manufactured') { p.type = 'manufactured'; }
       if (!U.num(s.workMinutes) && U.num(p.workMinutes)) { s.workMinutes = p.workMinutes; card.querySelector('.work').value = p.workMinutes; }
@@ -188,6 +191,12 @@
     const comps = card.querySelector('.comps');
     const renderComps = () => {
       comps.innerHTML = '';
+      if (s.continuesPrevious) {
+        const rs = Scheduler.resolveRecipe(r).steps.find(x => x.id === s.id);
+        const pin = rs && rs.chainInputPartId ? Store.partsById()[rs.chainInputPartId] : null;
+        const prev = rs && rs.chainPrevStepId ? r.steps.find(x => x.id === rs.chainPrevStepId) : null;
+        comps.appendChild(UI.el('<span class="chip" style="background:#e8effd;border-color:#bfd1f7" title="Implicit: the item worked on by the previous step">↳ from step ' + (prev ? UI.esc(String(prev.nr)) : '?') + (pin ? ': <span class="mono">' + UI.esc(pin.itemNr) + '</span> ' + UI.esc(pin.name.slice(0, 26)) : ' <span class="muted">(item not set yet)</span>') + ' ×1</span>'));
+      }
       (s.components || []).forEach((c, i) => {
         const p = pb[c.partId] || Store.partsById()[c.partId];
         const chip = UI.el('<span class="chip" title="' + UI.esc(p ? p.name : '') + '"><span class="mono">' + (p ? UI.esc(p.itemNr) : '<span class="badge err">?</span>') + '</span> <span class="muted">' + UI.esc(p ? p.name.slice(0, 28) : '') + '</span> ×<input type="number" min="0" step="any" value="' + c.qty + '"><span class="x" title="Remove">✕</span></span>');
@@ -195,7 +204,7 @@
         chip.querySelector('.x').addEventListener('click', () => { s.components.splice(i, 1); Store.save(); renderComps(); refresh(); });
         comps.appendChild(chip);
       });
-      if (!s.components.length) comps.appendChild(UI.el('<span class="muted small">No components yet.</span>'));
+      if (!s.components.length && !s.continuesPrevious) comps.appendChild(UI.el('<span class="muted small">No components yet.</span>'));
     };
     renderComps();
     const addPick = UI.partPicker({ placeholder: '+ add component (type item nr or name)…', clearAfterPick: true, onPick: p => {
@@ -285,6 +294,12 @@
 
     r.steps.forEach(s => {
       const card = document.querySelector('.step-card[data-id="' + s.id + '"]'); if (!card) return;
+      const rs = g.byId[s.id] || s;
+      const ci = card.querySelector('.chain-info');
+      if (ci) {
+        const po = rs.outputPartId ? pb[rs.outputPartId] : null;
+        ci.innerHTML = !s.outputPartId && rs.outputPartId ? '→ works on <span class="mono">' + UI.esc(po ? po.itemNr : '?') + '</span> ' + UI.esc(po ? po.name.slice(0, 30) : '') + (rs.chainNamedBy != null ? ' (named at step ' + UI.esc(String(rs.chainNamedBy)) + ')' : '') : (!rs.outputPartId ? '<span class="badge err">no item: set Produces here or on the last step of the chain</span>' : '');
+      }
       const units = ex.units[s.id] || 1;
       const res = rb[s.resourceId];
       const wm = Scheduler.stepWorkMinutes(s, units, res);
@@ -297,9 +312,10 @@
       const per10 = (() => { if (!res || !lt.lotSize) return ''; const lots = Math.ceil(10 / lt.lotSize), waves = Math.ceil(lots / res.capacity); return ' · 10 pcs = ' + lots + ' lot' + (lots > 1 ? 's' : '') + ' in ' + waves + ' wave' + (waves > 1 ? 's' : ''); })();
       const yTxt = Scheduler.yieldOf(s) < 1 ? ' · <b style="color:var(--danger)">yield ' + Math.round(Scheduler.yieldOf(s) * 100) + '%</b> → start ' + units + ' to get ' + (ex.good[s.id] || 1) : '';
       card.querySelector('.summary').innerHTML = 'Per product: <b>' + U.minutesToText(wm) + '</b> attended work' + (U.num(s.workers, 1) > 1 ? ' with ' + s.workers + ' workers' : '') + ' (' + U.round(Scheduler.stepLaborHours(s, units, res), 2) + ' labor h)' + (U.num(s.processHours) ? ' + <b style="color:var(--cure)">' + U.hoursToText(U.num(s.processHours)) + ' process per lot</b>' : '') + (units !== 1 && Scheduler.yieldOf(s) >= 1 ? ' · ' + units + ' units per product' : '') + yTxt + lotTxt + per10;
-      const deliv = (r.deliverables || []).find(d => d.partId === s.outputPartId);
-      const isFinal = s.outputPartId === r.finalPartId;
-      const orphan = s.outputPartId && !succs.length && !isFinal;
+      const outId = rs.outputPartId;
+      const deliv = (r.deliverables || []).find(d => d.partId === outId);
+      const isFinal = outId === r.finalPartId;
+      const orphan = outId && !succs.length && !isFinal && !!s.outputPartId;
       card.querySelector('.deps').innerHTML = (preds.length ? 'After: <b>' + preds.map(p => UI.esc(p.nr + ' ' + p.name)).join(', ') + '</b>' : '<span class="badge">start step</span>') +
         (succs.length ? ' &nbsp;→ Before: <b>' + succs.map(p => UI.esc(p.nr + ' ' + p.name)).join(', ') + '</b>' : (isFinal ? ' &nbsp;<span class="badge ok">final step</span>' : '')) +
         (deliv ? ' &nbsp;<span class="badge ok">delivered separately: ' + deliv.qtyPerProduct + ' per product</span> <button class="btn btn-sm" data-deliver="1">change</button>' :
@@ -309,7 +325,7 @@
     // validation
     const warnings = g.warnings.concat(ex.warnings);
     if (!r.finalPartId) warnings.unshift({ level: 'error', text: 'Select the final product part.' });
-    else if (!r.steps.some(s => s.outputPartId === r.finalPartId)) warnings.unshift({ level: 'error', text: 'No step produces the final product.' });
+    else if (!Object.values(g.byId).some(s => s.outputPartId === r.finalPartId)) warnings.unshift({ level: 'error', text: 'No step produces the final product.' });
     r.steps.forEach(s => { if (!s.name) warnings.push({ level: 'warn', text: 'Step ' + s.nr + ' has no name.' }); });
     const v = document.getElementById('r-validation');
     if (v) v.innerHTML = warnings.length ? '<div class="alert ' + (warnings.some(w => w.level === 'error') ? 'err' : 'warn') + '"><ul>' + warnings.map(w => '<li>' + UI.esc(w.text) + '</li>').join('') + '</ul></div>' : '<div class="alert ok">Recipe is consistent: ' + r.steps.length + ' steps, ' + Object.keys(g.producers).length + ' produced parts, ' + ex.purchases.length + ' purchased parts.</div>';
@@ -318,16 +334,19 @@
     const side = document.getElementById('r-side');
     if (!side) return;
     let html = '<div class="panel-head"><h3>Recipe summary</h3></div>';
-    if (r.finalPartId && !g.cycle) {
+    const rx = Scheduler.expandRecipe(r, Store.state.recipes, pb);
+    const gx = rx.expanded ? Scheduler.buildGraph(rx, pb) : g;
+    if (rx.expanded) html += '<div class="alert info small" style="margin-bottom:8px">Chained recipes: ' + rx.subRecipes.map(x => UI.esc(x.recipe.name) + ' (' + x.code + ')').join(', ') + ' supply sub-assemblies to this recipe and are included below and in plans.</div>';
+    if (r.finalPartId && !gx.cycle) {
       const cal = Store.calendar();
       const due = cal.shiftEndOn(new Date(2030, 0, 4)); // any Friday far away
-      const res = Scheduler.schedule({ recipe: r, partsById: pb, resourcesById: rb, calendarsById: Store.calendarsById(), qty: 1, due, planStart: new Date(2020, 0, 6, 7, 0), calendar: cal });
+      const res = Scheduler.schedule({ recipe: rx, partsById: pb, resourcesById: rb, calendarsById: Store.calendarsById(), qty: 1, due, planStart: new Date(2020, 0, 6, 7, 0), calendar: cal });
       html += '<div class="kpis" style="grid-template-columns:1fr 1fr">' +
         '<div class="kpi"><div class="k">Lead time, 1 pc</div><div class="v">' + U.hoursToText(res.totals.leadCalendarHoursJIT) + '</div><div class="s">calendar, JIT from due date</div></div>' +
         '<div class="kpi"><div class="k">Labor, 1 pc</div><div class="v">' + U.round(res.totals.laborHours, 1) + ' h</div><div class="s">' + U.round(res.totals.cureHours, 1) + ' h cure/wait total</div></div></div>';
       html += '<h3 class="mt">Critical path (1 pc)</h3><ol style="margin:4px 0 0 18px;padding:0;font-size:13px">' + res.list.filter(x => x.critical).map(x => '<li>' + UI.esc(x.step.nr + ' ' + x.step.name) + ' <span class="muted">' + U.minutesToText(x.workMinutes) + (x.processHours ? ' + ' + U.hoursToText(x.processHours) + ' process' : '') + '</span></li>').join('') + '</ol>';
     }
-    html += '<h3 class="mt">Product structure</h3>' + RecipesUI.structureHtml(r, g, pb);
+    html += '<h3 class="mt">Product structure</h3>' + RecipesUI.structureHtml(rx, gx, pb);
     side.innerHTML = html;
   };
 
@@ -341,7 +360,7 @@
       chip.querySelector('.x').addEventListener('click', () => { Store.setDeliverable(r, d.partId, 0); Store.save(); RecipesUI.render(); });
       host.appendChild(chip);
     });
-    const produced = Array.from(new Set(r.steps.map(s => s.outputPartId).filter(pid => pid && pid !== r.finalPartId && !(r.deliverables || []).some(d => d.partId === pid))));
+    const produced = Array.from(new Set(Scheduler.resolveRecipe(r).steps.map(s => s.outputPartId).filter(pid => pid && pid !== r.finalPartId && !(r.deliverables || []).some(d => d.partId === pid))));
     if (produced.length) {
       const sel = UI.el('<select><option value="">+ add item delivered separately…</option>' + produced.map(pid => '<option value="' + pid + '">' + UI.esc((pb[pid] || {}).itemNr + ' – ' + (pb[pid] || {}).name) + '</option>').join('') + '</select>');
       sel.addEventListener('change', () => { if (sel.value) { Store.setDeliverable(r, sel.value, 1); Store.save(); RecipesUI.render(); } });
@@ -358,7 +377,7 @@
       const prods = producersOf(pid).filter(s => !(s.components || []).some(c => c.partId === pid)); // real producers
       const passes = producersOf(pid).filter(s => (s.components || []).some(c => c.partId === pid));
       let html = '<li><span class="mono">' + (p ? UI.esc(p.itemNr) : '?') + '</span> ' + UI.esc(p ? p.name : 'missing') + (qty !== 1 ? ' <span class="badge">×' + qty + '</span>' : '') +
-        (prods.length ? ' <span class="muted small">← step ' + prods.map(s => s.nr).join(', ') + (passes.length ? ' then ' + passes.map(s => s.nr).join(', ') : '') + '</span>' : ' <span class="badge purchased">buy</span>' + (p && U.num(p.leadTimeDays) ? ' <span class="muted small">' + p.leadTimeDays + ' d</span>' : '')) + '</li>';
+        (prods.length ? ' <span class="muted small">← step ' + prods.map(s => s.nr).join(', ') + (passes.length ? ' then ' + passes.map(s => s.nr).join(', ') : '') + (prods[0].subCode ? ' <span class="badge">recipe ' + UI.esc(prods[0].subCode) + '</span>' : '') + '</span>' : ' <span class="badge purchased">buy</span>' + (p && U.num(p.leadTimeDays) ? ' <span class="muted small">' + p.leadTimeDays + ' d</span>' : '')) + '</li>';
       if (prods.length && depth < 12 && !seen.has(pid)) {
         seen.add(pid);
         const comps = [];

@@ -61,6 +61,7 @@
         if (s.workerPoolId === undefined) s.workerPoolId = null;
         if (s.transferPerLot === undefined) s.transferPerLot = false;
         if (s.yieldPct == null) s.yieldPct = 100;
+        if (s.continuesPrevious === undefined) s.continuesPrevious = false;
       }));
     },
 
@@ -235,7 +236,7 @@
     /* ---- recipes ---- */
     newStep(o) {
       return Object.assign({ id: U.uid('s'), nr: 10, name: '', type: 'assembly', outputPartId: null, components: [],
-        workMinutes: 0, workers: 1, fixedMinutes: 0, processHours: 0, resourceId: null, lotSize: 0, workerPoolId: null, transferPerLot: false, yieldPct: 100, extraPreds: [], notes: '' }, o || {});
+        workMinutes: 0, workers: 1, fixedMinutes: 0, processHours: 0, resourceId: null, lotSize: 0, workerPoolId: null, transferPerLot: false, yieldPct: 100, continuesPrevious: false, extraPreds: [], notes: '' }, o || {});
     },
     newRecipe(o) { return Object.assign({ id: U.uid('r'), name: '', finalPartId: null, deliverables: [], steps: [], notes: '' }, o || {}); },
     /** Mark a part as delivered separately with a quantity per product (0 removes it). */

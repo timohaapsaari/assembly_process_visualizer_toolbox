@@ -66,7 +66,7 @@
     p.milestones = p.milestones || [];
     PlanUI.renderMilestones(p, form.querySelector('#ms-list'));
     form.querySelector('#ms-add').addEventListener('click', () => {
-      const r = Store.recipe(p.recipeId); if (!r) { UI.toast('Select a recipe first', 'err'); return; }
+      const r = Scheduler.expandRecipe(Store.recipe(p.recipeId), Store.state.recipes, Store.partsById()); if (!r) { UI.toast('Select a recipe first', 'err'); return; }
       const produced = r.steps.map(x => x.outputPartId).filter(x => x && x !== r.finalPartId);
       p.milestones.push({ partId: produced[0] || null, dueDate: p.dueDate, dueTime: p.dueTime || cal.endHHMM(), qty: 0 });
       Store.save(); PlanUI.renderMilestones(p, form.querySelector('#ms-list')); PlanUI.compute();
@@ -90,7 +90,7 @@
 
   PlanUI.renderMilestones = function (p, host) {
     host.innerHTML = '';
-    const r = Store.recipe(p.recipeId); const pb = Store.partsById(); const cal = Store.calendar();
+    const r = Scheduler.expandRecipe(Store.recipe(p.recipeId), Store.state.recipes, Store.partsById()); const pb = Store.partsById(); const cal = Store.calendar();
     const produced = r ? Array.from(new Set(r.steps.map(x => x.outputPartId).filter(Boolean))) : [];
     (p.milestones || []).forEach((m, i) => {
       const row = UI.el('<div class="form-row" style="margin-bottom:6px">' +
@@ -111,8 +111,9 @@
 
   PlanUI.compute = function () {
     const p = currentPlan(); const out = document.getElementById('pl-out'); if (!p || !out) return;
-    const r = Store.recipe(p.recipeId);
-    if (!r) { out.innerHTML = '<div class="alert warn">Select a recipe.</div>'; return; }
+    const r0 = Store.recipe(p.recipeId);
+    if (!r0) { out.innerHTML = '<div class="alert warn">Select a recipe.</div>'; return; }
+    const r = Scheduler.expandRecipe(r0, Store.state.recipes, Store.partsById());
     const cal = Store.calendar();
     const due = U.parseLocal(p.dueDate + ' ' + (p.dueTime || cal.endHHMM()));
     if (!due) { out.innerHTML = '<div class="alert warn">Enter a delivery date.</div>'; return; }
@@ -168,6 +169,7 @@
     res.warnings.forEach(w => alerts.push({ cls: w.level === 'error' ? 'err' : 'warn', text: w.text }));
     conflicts.forEach(e => alerts.push({ cls: 'err', text: (e.resource.type === 'labor' ? 'Worker pool "' : 'Equipment "') + e.resource.name + '" (capacity ' + e.resource.capacity + ') is over capacity in the ' + mode.toUpperCase() + ' schedule: ' + e.conflicts.slice(0, 3).map(c => U.niceDateTime(c.a) + ' – ' + U.niceDateTime(c.b) + ' (' + c.load + ' needed)').join(', ') + (e.conflicts.length > 3 ? ' and ' + (e.conflicts.length - 3) + ' more' : '') + '. Competing lots are shown red in the resource occupancy chart; add capacity, change lot sizes or sequence the steps.' }));
     if (overload && overload.length) alerts.push({ cls: 'warn', text: 'Worker capacity (' + maxW + ') exceeded on ' + overload.map(d => U.niceDate(U.parseLocal(d.date)) + ' (' + d.peakWorkers + ')').join(', ') + '.' });
+    if (res.recipe.expanded) alerts.unshift({ cls: 'info', text: 'Recipe chain: ' + res.recipe.subRecipes.map(x => '"' + x.recipe.name + '" (' + x.code + '.…) makes ' + ((pb[x.partId] || {}).itemNr || '')).join(', ') + '. Their steps are scheduled as part of this plan.' });
     html += alerts.map(a => '<div class="alert ' + a.cls + '">' + UI.esc(a.text) + '</div>').join('');
 
     // controls + gantt
@@ -209,12 +211,14 @@
       Store.save(); PlanUI.drawGantt(res, mode); PlanUI.drawResourceGantt(res, mode, PlanUI.rload);
       if (z !== 'fit') { const g = document.querySelector('#gantt .gantt-scroll'); const first = g && g.querySelector('g.bar rect'); if (first) g.scrollLeft = Math.max(0, +first.getAttribute('x') - 60); }
     }));
-    out.querySelectorAll('#sched tbody tr').forEach(tr => { tr.addEventListener('click', () => { PlanUI.select(tr.dataset.id, res, mode); }); tr.addEventListener('dblclick', () => root.App.editStep(res.recipe.id, tr.dataset.id)); tr.title = 'Click to highlight, double-click to edit the step'; });
+    out.querySelectorAll('#sched tbody tr').forEach(tr => { tr.addEventListener('click', () => { PlanUI.select(tr.dataset.id, res, mode); }); tr.addEventListener('dblclick', () => PlanUI.edit(res, tr.dataset.id)); tr.title = 'Click to highlight, double-click to edit the step'; });
     PlanUI.drawGantt(res, mode);
     PlanUI.drawResourceGantt(res, mode, rload);
     PlanUI.drawNetwork(res, mode);
     PlanUI.drawLoad(load, maxW);
   };
+
+  PlanUI.edit = function (res, id) { const st = res.rows[id] && res.rows[id].step; if (!st) return; root.App.editStep(st.sourceRecipeId || res.recipe.id, st.sourceStepId || st.id); };
 
   PlanUI.select = function (id, res, mode) {
     PlanUI.selectedStepId = PlanUI.selectedStepId === id ? null : id;
@@ -352,7 +356,7 @@
       g.addEventListener('mousemove', e => UI.moveTip(e.clientX, e.clientY));
       g.addEventListener('mouseleave', UI.hideTip);
       g.addEventListener('click', () => PlanUI.select(g.dataset.id, res, mode));
-      g.addEventListener('dblclick', () => { UI.hideTip(); root.App.editStep(res.recipe.id, g.dataset.id); });
+      g.addEventListener('dblclick', () => { UI.hideTip(); PlanUI.edit(res, g.dataset.id); });
     });
     wrap.querySelectorAll('g.bar').forEach(g => {
       const x = res.rows[g.dataset.id];
@@ -360,7 +364,7 @@
       g.addEventListener('mousemove', e => UI.moveTip(e.clientX, e.clientY));
       g.addEventListener('mouseleave', UI.hideTip);
       g.addEventListener('click', () => PlanUI.select(g.dataset.id, res, mode));
-      g.addEventListener('dblclick', () => { UI.hideTip(); root.App.editStep(res.recipe.id, g.dataset.id); });
+      g.addEventListener('dblclick', () => { UI.hideTip(); PlanUI.edit(res, g.dataset.id); });
     });
   };
 
@@ -435,7 +439,7 @@
       g.addEventListener('mousemove', e => UI.moveTip(e.clientX, e.clientY));
       g.addEventListener('mouseleave', UI.hideTip);
       g.addEventListener('click', () => PlanUI.select(g.dataset.id, res, mode));
-      g.addEventListener('dblclick', () => { UI.hideTip(); root.App.editStep(res.recipe.id, g.dataset.id); });
+      g.addEventListener('dblclick', () => { UI.hideTip(); PlanUI.edit(res, g.dataset.id); });
     });
     // keep both charts scrolled together
     const b = wrap.querySelector('.gantt-scroll');
@@ -489,7 +493,7 @@
       g.addEventListener('mousemove', e => UI.moveTip(e.clientX, e.clientY));
       g.addEventListener('mouseleave', UI.hideTip);
       g.addEventListener('click', () => PlanUI.select(g.dataset.id, res, mode));
-      g.addEventListener('dblclick', () => { UI.hideTip(); root.App.editStep(res.recipe.id, g.dataset.id); });
+      g.addEventListener('dblclick', () => { UI.hideTip(); PlanUI.edit(res, g.dataset.id); });
     });
   };
 

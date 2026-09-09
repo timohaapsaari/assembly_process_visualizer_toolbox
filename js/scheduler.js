@@ -44,17 +44,58 @@
   };
 
   /**
+   * Resolve step chains. A step with `continuesPrevious` works on the item of the previous step (same recipe):
+   * that item becomes its implicit input, and its output is its own named item, else the item named by the
+   * nearest downstream step of the unbroken chain, else the upstream chain item. So only the step that creates
+   * an item has to name it ("Produces"); intermediate steps (dispensing, curing, testing…) just continue.
+   * Returns a copy of the recipe with outputPartId / components filled in (original objects untouched).
+   */
+  S.resolveRecipe = function (recipe) {
+    if (!recipe || recipe._resolved) return recipe;
+    const out = (recipe.steps || []).map(s => Object.assign({}, s, { components: (s.components || []).map(c => Object.assign({}, c)), extraPreds: (s.extraPreds || []).slice() }));
+    const group = s => s.chainGroup || recipe.id;
+    const prevOf = i => { for (let j = i - 1; j >= 0; j--) if (group(out[j]) === group(out[i])) return j; return -1; };
+    const nextOf = i => { for (let j = i + 1; j < out.length; j++) if (group(out[j]) === group(out[i])) return j; return -1; };
+    const eff = new Array(out.length).fill(null), src = new Array(out.length).fill(null);
+    const warnings = [];
+    for (let i = 0; i < out.length; i++) {
+      const s = out[i];
+      if (s.outputPartId) { eff[i] = s.outputPartId; continue; }
+      let j = nextOf(i), found = null, from = null;
+      while (j >= 0 && out[j].continuesPrevious) { if (out[j].outputPartId) { found = out[j].outputPartId; from = out[j]; break; } j = nextOf(j); }
+      if (!found && s.continuesPrevious) { let k = prevOf(i); while (k >= 0) { if (eff[k]) { found = eff[k]; from = out[k]; break; } if (!out[k].continuesPrevious) break; k = prevOf(k); } }
+      eff[i] = found; src[i] = from;
+    }
+    out.forEach((s, i) => {
+      s.rawOutputPartId = s.outputPartId || null;
+      s.outputPartId = eff[i];
+      s.chainNamedBy = src[i] ? src[i].nr : null;
+      if (s.continuesPrevious) {
+        const k = prevOf(i);
+        if (k < 0) { s.continuesPrevious = false; warnings.push({ level: 'warn', text: 'Step ' + s.nr + ' "' + s.name + '" is the first step and cannot continue a previous one.' }); }
+        else if (eff[k]) {
+          s.chainInputPartId = eff[k]; s.chainPrevStepId = out[k].id;
+          if (!s.components.some(c => c.partId === eff[k])) s.components.unshift({ partId: eff[k], qty: 1, implicit: true });
+        }
+      }
+      if (!eff[i]) warnings.push({ level: 'error', text: 'Step ' + s.nr + ' "' + s.name + '": no item. Set "Produces" on this step or on the last step of its chain.' });
+    });
+    return Object.assign({}, recipe, { steps: out, _resolved: true, resolveWarnings: warnings });
+  };
+
+  /**
    * Build the precedence graph. Edges: producer -> consumer (component part produced by another step),
    * plus explicit extra predecessors. Returns {order, preds, succs, cycle, warnings}.
    */
   S.buildGraph = function (recipe, partsById) {
+    recipe = S.resolveRecipe(recipe);
     const steps = recipe.steps || [];
     const byId = {};
     steps.forEach(s => { byId[s.id] = s; });
     const producers = {};   // partId -> [stepId]
     steps.forEach(s => { if (s.outputPartId) (producers[s.outputPartId] = producers[s.outputPartId] || []).push(s.id); });
 
-    const preds = {}, succs = {}, warnings = [];
+    const preds = {}, succs = {}, warnings = (recipe.resolveWarnings || []).slice();
     steps.forEach(s => { preds[s.id] = new Set(); succs[s.id] = new Set(); });
 
     steps.forEach(s => {
@@ -99,7 +140,7 @@
 
     // Diagnostics
     steps.forEach(s => {
-      if (!s.outputPartId) warnings.push({ level: 'warn', text: 'Step ' + s.nr + ' "' + s.name + '" has no output part.' });
+      if (!s.outputPartId && !(recipe.resolveWarnings || []).length) warnings.push({ level: 'warn', text: 'Step ' + s.nr + ' "' + s.name + '" has no output part.' });
       (s.components || []).forEach(c => {
         if (!partsById[c.partId]) warnings.push({ level: 'warn', text: 'Step ' + s.nr + ' uses an unknown part.' });
       });
@@ -112,7 +153,7 @@
       }
     });
 
-    return { order, preds, succs, cycle, warnings, producers, byId };
+    return { order, preds, succs, cycle, warnings, producers, byId, recipe };
   };
 
   /**
@@ -120,6 +161,7 @@
    * and the demand for purchased (non-produced) parts.
    */
   S.explode = function (recipe, partsById, qty, graph, extraDemand) {
+    recipe = S.resolveRecipe(recipe);
     graph = graph || S.buildGraph(recipe, partsById);
     const demand = {};  // partId -> units
     const units = {};   // stepId -> units
@@ -172,6 +214,51 @@
     return Math.min(1, Math.max(0.01, (y > 0 ? y : 100) / 100));
   };
 
+  /**
+   * Chain recipes: components that no step of `recipe` produces but that are the final product of another recipe
+   * pull that recipe's steps in (recursively). Returns a virtual recipe with all steps; sub-recipe steps get a
+   * prefixed nr ("A2.10"), a name prefix, and sourceRecipeId / sourceStepId for editing.
+   */
+  S.expandRecipe = function (recipe, allRecipes, partsById) {
+    if (!recipe) return recipe;
+    const visited = new Set([recipe.id]);
+    const codes = {};
+    const makeCode = name => {
+      let code = String(name || 'SUB').split(/\s+/).map(w => w.replace(/[^A-Za-z0-9]/g, '').slice(0, 1)).join('').toUpperCase().slice(0, 4) || 'SUB';
+      let c = code, n = 2; while (codes[c]) c = code + (n++); codes[c] = true; return c;
+    };
+    const clone = (r, code) => (r.steps || []).map(s => Object.assign({}, s, {
+      id: code ? r.id + ':' + s.id : s.id,
+      nr: code ? code + '.' + s.nr : s.nr,
+      name: code ? r.name + ' › ' + s.name : s.name,
+      extraPreds: (s.extraPreds || []).map(id => code ? r.id + ':' + id : id),
+      components: (s.components || []).map(c => Object.assign({}, c)),
+      sourceRecipeId: r.id, sourceStepId: s.id, subCode: code || '', chainGroup: r.id
+    }));
+    const steps = clone(recipe, '');
+    const subRecipes = [];
+    let changed = true;
+    while (changed) {
+      changed = false;
+      const produced = new Set(S.resolveRecipe({ id: recipe.id, steps }).steps.map(s => s.outputPartId).filter(Boolean));
+      for (const s of steps) {
+        for (const c of (s.components || [])) {
+          if (produced.has(c.partId)) continue;
+          const sub = (allRecipes || []).find(r => !visited.has(r.id) && r.finalPartId === c.partId && r.id !== recipe.id);
+          if (!sub) continue;
+          visited.add(sub.id);
+          const code = makeCode(sub.name);
+          subRecipes.push({ recipe: sub, code, partId: c.partId });
+          clone(sub, code).forEach(x => steps.push(x));
+          produced.add(c.partId);
+          changed = true;
+        }
+        if (changed) break;
+      }
+    }
+    return Object.assign({}, recipe, { steps, subRecipes, expanded: subRecipes.length > 0 });
+  };
+
   /** Split [a,b] into working windows (for drawing bars that skip nights/weekends). */
   S.workSegments = function (cal, a, b) {
     if (!(b > a)) return [];
@@ -210,7 +297,7 @@
    * unattended process (curing, testing) on a process resource with capacity × lot size, in the resource calendar.
    */
   S.schedule = function (opts) {
-    const recipe = opts.recipe, partsById = opts.partsById || {}, resById = opts.resourcesById || {};
+    const recipe = S.resolveRecipe(opts.recipe), partsById = opts.partsById || {}, resById = opts.resourcesById || {};
     const calById = opts.calendarsById || {};
     const qty = Math.max(1, U.num(opts.qty, 1));
     const cal = opts.calendar instanceof Calendar ? opts.calendar : new Calendar(opts.calendar);
