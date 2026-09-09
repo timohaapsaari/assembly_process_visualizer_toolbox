@@ -84,6 +84,9 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .tbl input, .tbl select { padding: 3px 6px; }
 .tbl-wrap { overflow: auto; max-height: 70vh; border: 1px solid var(--border); border-radius: 6px; }
 .tbl tr.selected { background: #e8effd; }
+.tbl tr.group td { background: #eef2f7; cursor: pointer; border-top: 1px solid var(--border); }
+.tbl tr.group:hover td { background: #e2e8f0; }
+.grp-toggle { display: inline-block; width: 14px; color: var(--muted); }
 
 /* badges / chips */
 .badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; background: #e2e8f0; color: #334155; white-space: nowrap; }

@@ -88,6 +88,37 @@
 
   PlanUI.fileBase = p => (p.name || 'plan').replace(/[^\w.-]+/g, '_');
 
+  /** Group scheduled rows by source recipe (only when the plan chains several recipes). Returns null when not grouped. */
+  PlanUI.groups = function (res, rows, mode) {
+    if (!res.recipe.expanded) return null;
+    const start = x => mode === 'jit' ? x.LS : x.ES, fin = x => mode === 'jit' ? x.LF : x.EF;
+    const byId = {};
+    rows.forEach(x => {
+      const gid = x.step.sourceRecipeId || res.recipe.id;
+      if (!byId[gid]) {
+        const sub = (res.recipe.subRecipes || []).find(s => s.recipe.id === gid);
+        byId[gid] = { id: gid, code: sub ? sub.code : '', name: sub ? sub.recipe.name : res.recipe.name, main: !sub, rows: [] };
+      }
+      byId[gid].rows.push(x);
+    });
+    const collapsed = Store.state.ui.collapsed || {};
+    return Object.values(byId).map(g => {
+      g.start = g.rows.reduce((m, x) => (!m || start(x) < m ? start(x) : m), null);
+      g.finish = g.rows.reduce((m, x) => (!m || fin(x) > m ? fin(x) : m), null);
+      g.critical = g.rows.some(x => x.critical);
+      g.collapsed = !!collapsed[g.id];
+      g.labor = g.rows.reduce((a, x) => a + x.laborHours, 0);
+      return g;
+    }).sort((a, b) => (a.main === b.main ? a.start - b.start : a.main ? 1 : -1));
+  };
+  PlanUI.toggleGroup = function (gid, res, mode, all) {
+    const st = Store.state; st.ui.collapsed = st.ui.collapsed || {};
+    if (all === 'collapse') (PlanUI.groups(res, res.list, mode) || []).forEach(g => { st.ui.collapsed[g.id] = true; });
+    else if (all === 'expand') st.ui.collapsed = {};
+    else st.ui.collapsed[gid] = !st.ui.collapsed[gid];
+    Store.save(); PlanUI.renderResult(res);
+  };
+
   PlanUI.renderMilestones = function (p, host) {
     host.innerHTML = '';
     const r = Scheduler.expandRecipe(Store.recipe(p.recipeId), Store.state.recipes, Store.partsById()); const pb = Store.partsById(); const cal = Store.calendar();
@@ -183,6 +214,7 @@
     html += '<div class="panel"><div class="panel-head no-print"><h3>Schedule</h3>' +
       '<span class="btn-group"><button class="btn btn-sm' + (mode === 'jit' ? ' active' : '') + '" data-mode="jit" title="Backward from delivery date: latest possible start of every step (just-in-time)">Backward (JIT)</button><button class="btn btn-sm' + (mode === 'asap' ? ' active' : '') + '" data-mode="asap" title="Forward from earliest start: as soon as possible">Forward (ASAP)</button></span>' +
       '<label class="check"><input type="checkbox" id="g-crit" ' + (PlanUI.showCriticalOnly ? 'checked' : '') + '> critical path only</label>' +
+      (res.recipe.expanded ? '<span class="btn-group"><button class="btn btn-sm" data-grp="collapse" title="Show one summary row per recipe">Collapse recipes</button><button class="btn btn-sm" data-grp="expand" title="Show every step">Expand all</button></span>' : '') +
       '<span class="spacer"></span><span class="muted small">zoom</span><span class="btn-group"><button class="btn btn-sm" data-zoom="out" title="Zoom out">−</button><button class="btn btn-sm" data-zoom="fit" title="Fit whole plan in view">Fit</button><button class="btn btn-sm" data-zoom="days" title="About 90 px per day">Days</button><button class="btn btn-sm" data-zoom="hours" title="Show hours">Hours</button><button class="btn btn-sm" data-zoom="in" title="Zoom in">+</button></span></div>' +
       '<div class="gantt-wrap" id="gantt"></div>' +
       '<div class="gantt-legend"><span><i style="background:#2f6fed"></i>work (colour = step type)</span><span><i style="background:repeating-linear-gradient(45deg,#c46a1c,#c46a1c 3px,#fde8d3 3px,#fde8d3 6px)"></i>process / cure per lot</span><span><i style="background:#fff;border:2px solid var(--critical)"></i>critical path</span><span><i style="background:var(--nonwork)"></i>non-working time</span><span><i style="background:#cbd5e1;height:3px"></i>float (could start earlier)</span><span style="color:var(--accent)">│ start</span><span style="color:var(--danger)">│ due</span></div>' +
@@ -194,12 +226,15 @@
 
     // schedule table
     const order = res.list.slice().sort((a, b) => (mode === 'jit' ? a.LS - b.LS : a.ES - b.ES) || U.num(a.step.nr) - U.num(b.step.nr));
-    html += '<div class="panel"><div class="panel-head"><h3>Step schedule</h3><span class="muted small">' + (mode === 'jit' ? 'latest start / finish (backward from due date)' : 'earliest start / finish (forward from start)') + ' · double-click a row to edit the step</span></div><div class="tbl-wrap"><table class="tbl" id="sched"><thead><tr><th>Step</th><th>Type</th><th>Output</th><th class="num">Units</th><th>Resource / lots</th><th class="num">Workers</th><th class="num">Work</th><th class="num">Process</th><th>Start</th><th>Work end</th><th>Finish</th><th class="num">Float</th><th>After</th></tr></thead><tbody>' +
-      order.map(x => {
+    const tgroups = PlanUI.groups(res, order, mode);
+    const rowHtml = x => {
         const s = x.step, o = pb[s.outputPartId];
         const S = mode === 'jit' ? x.LS : x.ES, WE = mode === 'jit' ? x.LworkEnd : x.EworkEnd, F = mode === 'jit' ? x.LF : x.EF;
-        return '<tr class="' + (x.critical ? 'critical' : '') + (PlanUI.selectedStepId === s.id ? ' selected' : '') + '" data-id="' + s.id + '"><td><b>' + UI.esc(s.nr) + '</b> ' + UI.esc(s.name) + (x.link ? ' <span class="badge" title="Times come from the chained recipe">link</span>' : '') + '</td><td>' + UI.typeBadge(s.type) + '</td><td class="mono">' + (o ? UI.esc(o.itemNr) : '') + '</td><td class="num">' + U.round(x.units, 2) + (x.yield < 1 ? '<br><span class="small" style="color:var(--danger)">' + Math.round(x.yield * 100) + '% → ' + U.round(x.good, 1) + '</span>' : '') + '</td><td class="small">' + (x.resource ? UI.esc(x.resource.name) + '<br>' : '') + (x.nLots > 1 ? x.nLots + ' lots' + (x.waves > 1 ? ' / ' + x.waves + ' waves' : '') + (x.transfer ? ' ⇢' : '') : (x.resource ? '1 lot' : '')) + '</td><td class="num">' + x.workers + (x.pool ? '<br><span class="small muted">' + UI.esc(x.pool.name) + '</span>' : '') + '</td><td class="num nowrap">' + U.minutesToText(x.workMinutes) + '</td><td class="num nowrap">' + (x.processHours ? U.hoursToText(x.processHours) + (x.nLots > 1 ? ' / lot' : '') : '–') + '</td><td class="nowrap">' + U.niceDateTime(S) + '</td><td class="nowrap">' + U.niceDateTime(WE) + '</td><td class="nowrap">' + U.niceDateTime(F) + '</td><td class="num nowrap">' + (x.critical ? '<span class="badge err">critical</span>' : U.hoursToText(x.floatMinutes / 60)) + '</td><td class="small muted">' + x.preds.map(id => res.rows[id].step.nr).join(', ') + '</td></tr>';
-      }).join('') + '</tbody></table></div></div>';
+        return '<tr class="' + (x.critical ? 'critical' : '') + (PlanUI.selectedStepId === s.id ? ' selected' : '') + '" data-id="' + s.id + '"><td>' + (tgroups ? '<span class="muted" style="display:inline-block;width:14px"></span>' : '') + '<b>' + UI.esc(s.nr) + '</b> ' + UI.esc(s.name) + (x.link ? ' <span class="badge" title="Times come from the chained recipe">link</span>' : '') + '</td><td>' + UI.typeBadge(s.type) + '</td><td class="mono">' + (o ? UI.esc(o.itemNr) : '') + '</td><td class="num">' + U.round(x.units, 2) + (x.yield < 1 ? '<br><span class="small" style="color:var(--danger)">' + Math.round(x.yield * 100) + '% → ' + U.round(x.good, 1) + '</span>' : '') + '</td><td class="small">' + (x.resource ? UI.esc(x.resource.name) + '<br>' : '') + (x.nLots > 1 ? x.nLots + ' lots' + (x.waves > 1 ? ' / ' + x.waves + ' waves' : '') + (x.transfer ? ' ⇢' : '') : (x.resource ? '1 lot' : '')) + '</td><td class="num">' + x.workers + (x.pool ? '<br><span class="small muted">' + UI.esc(x.pool.name) + '</span>' : '') + '</td><td class="num nowrap">' + U.minutesToText(x.workMinutes) + '</td><td class="num nowrap">' + (x.processHours ? U.hoursToText(x.processHours) + (x.nLots > 1 ? ' / lot' : '') : '–') + '</td><td class="nowrap">' + U.niceDateTime(S) + '</td><td class="nowrap">' + U.niceDateTime(WE) + '</td><td class="nowrap">' + U.niceDateTime(F) + '</td><td class="num nowrap">' + (x.critical ? '<span class="badge err">critical</span>' : U.hoursToText(x.floatMinutes / 60)) + '</td><td class="small muted">' + x.preds.map(id => res.rows[id].step.nr).join(', ') + '</td></tr>';
+    };
+    const tableBody = tgroups ? tgroups.map(g => '<tr class="group" data-gid="' + g.id + '" title="Click to ' + (g.collapsed ? 'expand' : 'collapse') + '"><td colspan="13"><span class="grp-toggle">' + (g.collapsed ? '▸' : '▾') + '</span> <b>' + (g.code ? g.code + ' · ' : '') + UI.esc(g.name) + '</b> <span class="muted small">' + g.rows.length + ' steps · ' + U.niceDateTime(g.start) + ' → ' + U.niceDateTime(g.finish) + ' · ' + U.round(g.labor, 1) + ' labor h' + (g.critical ? ' · <span class="badge err">on critical path</span>' : '') + '</span></td></tr>' + (g.collapsed ? '' : g.rows.map(rowHtml).join(''))).join('') : order.map(rowHtml).join('');
+    html += '<div class="panel"><div class="panel-head"><h3>Step schedule</h3><span class="muted small">' + (mode === 'jit' ? 'latest start / finish (backward from due date)' : 'earliest start / finish (forward from start)') + ' · double-click a row to edit the step</span></div><div class="tbl-wrap"><table class="tbl" id="sched"><thead><tr><th>Step</th><th>Type</th><th>Output</th><th class="num">Units</th><th>Resource / lots</th><th class="num">Workers</th><th class="num">Work</th><th class="num">Process</th><th>Start</th><th>Work end</th><th>Finish</th><th class="num">Float</th><th>After</th></tr></thead><tbody>' +
+      tableBody + '</tbody></table></div></div>';
 
     // materials
     html += '<div class="panel"><div class="panel-head"><h3>Materials to purchase</h3><span class="muted small">demand exploded through all steps · need date = start of first consuming step · order-by = need date − lead time</span></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Item nr</th><th>Name</th><th class="num">Qty</th><th class="num">Lead time</th><th>Needed (JIT)</th><th>Order by (JIT)</th><th>Needed (ASAP)</th><th>Order by (ASAP)</th></tr></thead><tbody>' +
@@ -208,6 +243,8 @@
 
     out.innerHTML = html;
     out.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => { st.ui.ganttMode = b.dataset.mode; Store.save(); PlanUI.renderResult(res); }));
+    out.querySelectorAll('[data-grp]').forEach(b => b.addEventListener('click', () => PlanUI.toggleGroup(null, res, mode, b.dataset.grp)));
+    out.querySelectorAll('#sched tr.group').forEach(tr => tr.addEventListener('click', () => PlanUI.toggleGroup(tr.dataset.gid, res, mode)));
     out.querySelector('#g-crit').addEventListener('change', e => { PlanUI.showCriticalOnly = e.target.checked; PlanUI.drawGantt(res, mode); });
     const legend = out.querySelector('.gantt-legend'); if (legend) legend.insertAdjacentHTML('beforeend', '<span style="color:#7c3aed">┆ sub-assembly due</span>');
     out.querySelectorAll('[data-zoom]').forEach(b => b.addEventListener('click', () => {
@@ -253,16 +290,22 @@
     let rows = res.list.slice().sort((a, b) => (mode === 'jit' ? a.LS - b.LS : a.ES - b.ES) || U.num(a.step.nr) - U.num(b.step.nr));
     if (PlanUI.showCriticalOnly) rows = rows.filter(x => x.critical);
     const start = x => mode === 'jit' ? x.LS : x.ES, wend = x => mode === 'jit' ? x.LworkEnd : x.EworkEnd, fin = x => mode === 'jit' ? x.LF : x.EF;
+    // group by recipe when chained: items = group headers + (visible) step rows
+    const groups = PlanUI.groups(res, rows, mode);
+    const items = [];
+    if (groups) groups.forEach(g => { items.push({ group: g }); if (!g.collapsed) g.rows.forEach(x => items.push({ row: x })); });
+    else rows.forEach(x => items.push({ row: x }));
+    rows = items.filter(i => i.row).map(i => i.row);
 
     let t0 = new Date(Math.min(res.planStart, res.requiredStart, res.due)), t1 = new Date(Math.max(res.due, res.projectedFinish, res.planStart));
-    rows.forEach(x => { if (x.ES < t0) t0 = x.ES; if (x.LF > t1) t1 = x.LF; });
+    res.list.forEach(x => { if (x.ES < t0) t0 = x.ES; if (x.LF > t1) t1 = x.LF; });
     t0 = new Date(t0.getFullYear(), t0.getMonth(), t0.getDate()); t1 = new Date(t1.getFullYear(), t1.getMonth(), t1.getDate() + 1);
     const totalH = (t1 - t0) / 3600000;
     const labelW = 250, rowH = 28, headH = 40, padR = 20;
     const avail = Math.max(400, wrap.clientWidth - labelW - padR - 2);
     PlanUI.lastFitPxPerDay = (avail / totalH) * 24;
     const pxh = Math.max(0.5, (avail / totalH) * (st.ui.zoom || 1));
-    const W = totalH * pxh + padR, H = headH + rows.length * rowH + 10;
+    const W = totalH * pxh + padR, H = headH + items.length * rowH + 10;
     const X = t => ((t - t0) / 3600000) * pxh;
 
     let svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + Math.ceil(W) + '" height="' + H + '" font-family="system-ui, sans-serif" font-size="11">';
@@ -289,13 +332,25 @@
       if (i === 0 || d.getDate() === 1) svg += '<text x="' + (x + 3) + '" y="14" fill="#64748b" font-weight="600">' + d.toLocaleString('en', { month: 'long' }) + ' ' + d.getFullYear() + '</text>';
       if (showHours) for (let h = 6; h < 24; h += 6) { const xh = X(new Date(d.getFullYear(), d.getMonth(), d.getDate(), h)); svg += '<line x1="' + xh + '" y1="' + headH + '" x2="' + xh + '" y2="' + H + '" stroke="#f1f5f9"/><text x="' + (xh + 2) + '" y="' + (headH - 3) + '" fill="#94a3b8" font-size="9">' + h + ':00</text>'; }
     }
-    // rows
-    const yOf = {}; rows.forEach((x, i) => { yOf[x.step.id] = headH + i * rowH; });
-    rows.forEach((x, i) => {
-      const y = yOf[x.step.id];
+    // rows (steps and group headers)
+    const yOf = {}, gY = {};
+    items.forEach((it, i) => { if (it.row) yOf[it.row.step.id] = headH + i * rowH; else gY[it.group.id] = headH + i * rowH; });
+    items.forEach((it, i) => {
+      const y = headH + i * rowH;
+      if (it.group) { svg += '<rect x="0" y="' + y + '" width="' + W + '" height="' + rowH + '" fill="#eef2f7"/><line x1="0" y1="' + (y + rowH) + '" x2="' + W + '" y2="' + (y + rowH) + '" stroke="#dbe1ea"/>'; return; }
+      const x = it.row;
       const sel = PlanUI.selectedStepId === x.step.id;
       svg += '<rect x="0" y="' + y + '" width="' + W + '" height="' + rowH + '" fill="' + (sel ? '#e8effd' : (i % 2 ? '#fafbfd' : 'none')) + '" opacity="' + (sel ? 1 : 0.6) + '"/>';
       svg += '<line x1="0" y1="' + (y + rowH) + '" x2="' + W + '" y2="' + (y + rowH) + '" stroke="#eef2f7"/>';
+    });
+    // group summary bars
+    if (groups) groups.forEach(g => {
+      const y = gY[g.id]; if (y == null) return;
+      const x1 = X(g.start), x2 = Math.max(x1 + 3, X(g.finish)), cy = y + rowH / 2;
+      svg += '<g class="grp" data-gid="' + g.id + '" style="cursor:pointer"><rect x="' + x1 + '" y="' + (cy - 4) + '" width="' + (x2 - x1) + '" height="8" fill="' + (g.critical ? '#7f1d1d' : '#334155') + '" rx="1"/>' +
+        '<path d="M' + x1 + ',' + (cy + 4) + ' l5,6 l-5,0 z" fill="' + (g.critical ? '#7f1d1d' : '#334155') + '"/><path d="M' + x2 + ',' + (cy + 4) + ' l-5,6 l5,0 z" fill="' + (g.critical ? '#7f1d1d' : '#334155') + '"/>' +
+        '<rect x="' + x1 + '" y="' + y + '" width="' + Math.max(6, x2 - x1) + '" height="' + rowH + '" fill="transparent"/>' +
+        (X(g.finish) + 5 < W - 40 ? '<text x="' + (x2 + 6) + '" y="' + (cy + 4) + '" fill="#64748b" font-size="10">' + g.rows.length + ' steps' + (g.collapsed ? ' (collapsed)' : '') + '</text>' : '') + '</g>';
     });
     // dependency arrows
     rows.forEach(x => x.preds.forEach(pid => {
@@ -339,17 +394,25 @@
     svg += '</svg>';
     // labels column in its own (non-scrolling) SVG
     let lab = '<svg xmlns="http://www.w3.org/2000/svg" width="' + labelW + '" height="' + H + '" font-family="system-ui, sans-serif" font-size="11"><rect x="0" y="0" width="' + labelW + '" height="' + H + '" fill="#fff"/><line x1="' + (labelW - 1) + '" y1="0" x2="' + (labelW - 1) + '" y2="' + H + '" stroke="#dbe1ea"/>';
-    rows.forEach((x, i) => {
-      const y = yOf[x.step.id];
-      if (PlanUI.selectedStepId === x.step.id) lab += '<rect x="0" y="' + y + '" width="' + labelW + '" height="' + rowH + '" fill="#e8effd"/>';
-      lab += '<line x1="0" y1="' + (y + rowH) + '" x2="' + labelW + '" y2="' + (y + rowH) + '" stroke="#eef2f7"/>';
+    items.forEach((it, i) => {
+      const y = headH + i * rowH;
+      if (it.group) {
+        const g = it.group;
+        lab += '<g class="grp" data-gid="' + g.id + '" style="cursor:pointer"><rect x="0" y="' + y + '" width="' + labelW + '" height="' + rowH + '" fill="#eef2f7"/><line x1="0" y1="' + (y + rowH) + '" x2="' + labelW + '" y2="' + (y + rowH) + '" stroke="#dbe1ea"/>' +
+          '<text x="8" y="' + (y + 18) + '" fill="#1b2430" font-weight="700">' + (g.collapsed ? '▸' : '▾') + ' ' + UI.esc((g.code ? g.code + ' · ' : '') + (g.name.length > 26 ? g.name.slice(0, 25) + '…' : g.name)) + '</text></g>';
+        return;
+      }
+      const x = it.row, y2 = yOf[x.step.id];
+      if (PlanUI.selectedStepId === x.step.id) lab += '<rect x="0" y="' + y2 + '" width="' + labelW + '" height="' + rowH + '" fill="#e8effd"/>';
+      lab += '<line x1="0" y1="' + (y2 + rowH) + '" x2="' + labelW + '" y2="' + (y2 + rowH) + '" stroke="#eef2f7"/>';
     });
     rows.forEach(x => {
       const y = yOf[x.step.id], s = x.step, col = Scheduler.typeInfo(s.type).color;
-      lab += '<g class="lab" data-id="' + s.id + '" style="cursor:pointer"><rect x="0" y="' + y + '" width="' + labelW + '" height="' + rowH + '" fill="transparent"/><rect x="6" y="' + (y + 8) + '" width="4" height="' + (rowH - 16) + '" fill="' + col + '" rx="1"/>';
-      const name = (s.nr + ' ' + s.name);
-      lab += '<text x="16" y="' + (y + 13) + '" fill="#1b2430" font-weight="' + (x.critical ? '600' : '400') + '">' + UI.esc(name.length > 38 ? name.slice(0, 37) + '…' : name) + '</text>';
-      lab += '<text x="16" y="' + (y + 24) + '" fill="#64748b" font-size="9.5">' + U.round(x.units, 1) + ' pcs · ' + x.workers + ' w' + (x.resource ? ' · ' + UI.esc(x.resource.name.length > 14 ? x.resource.name.slice(0, 13) + '…' : x.resource.name) : '') + ' · ' + U.niceDateTime(start(x)) + '</text></g>';
+      const ind = groups ? 12 : 0;
+      lab += '<g class="lab" data-id="' + s.id + '" style="cursor:pointer"><rect x="0" y="' + y + '" width="' + labelW + '" height="' + rowH + '" fill="transparent"/><rect x="' + (6 + ind) + '" y="' + (y + 8) + '" width="4" height="' + (rowH - 16) + '" fill="' + col + '" rx="1"/>';
+      const name = groups && s.subCode ? (String(s.nr).replace(/^[^.]*\./, '') + ' ' + s.name.replace(/^.*› /, '')) : (s.nr + ' ' + s.name);
+      lab += '<text x="' + (16 + ind) + '" y="' + (y + 13) + '" fill="#1b2430" font-weight="' + (x.critical ? '600' : '400') + '">' + UI.esc(name.length > 36 ? name.slice(0, 35) + '…' : name) + '</text>';
+      lab += '<text x="' + (16 + ind) + '" y="' + (y + 24) + '" fill="#64748b" font-size="9.5">' + U.round(x.units, 1) + ' pcs · ' + x.workers + ' w' + (x.resource ? ' · ' + UI.esc(x.resource.name.length > 14 ? x.resource.name.slice(0, 13) + '…' : x.resource.name) : '') + ' · ' + U.niceDateTime(start(x)) + '</text></g>';
     });
     lab += '<text x="8" y="14" fill="#64748b" font-weight="600">' + (mode === 'jit' ? 'Backward (JIT) schedule' : 'Forward (ASAP) schedule') + '</text>';
     lab += '<text x="8" y="33" fill="#94a3b8" font-size="10">' + rows.length + ' steps · hover bars for details</text>';
@@ -357,6 +420,7 @@
     const prevScroll = wrap.querySelector('.gantt-scroll') ? wrap.querySelector('.gantt-scroll').scrollLeft : 0;
     wrap.innerHTML = '<div class="gantt-labels">' + lab + '</div><div class="gantt-scroll">' + svg + '</div>';
     wrap.querySelector('.gantt-scroll').scrollLeft = prevScroll;
+    wrap.querySelectorAll('g.grp').forEach(g => g.addEventListener('click', () => PlanUI.toggleGroup(g.dataset.gid, res, mode)));
     wrap.querySelectorAll('g.lab').forEach(g => {
       const x = res.rows[g.dataset.id];
       g.addEventListener('mouseenter', e => UI.showTip(PlanUI.tipHtml(x, res, mode, pb), e.clientX, e.clientY));
