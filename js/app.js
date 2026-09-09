@@ -81,6 +81,7 @@
     Store.load();
     document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => App.showTab(b.dataset.tab)));
     document.getElementById('btnHelp').addEventListener('click', App.help);
+    const vt = document.getElementById('verTag'); if (vt) vt.textContent = 'v' + (window.APP_VERSION || '?');
     if (Store.state.firstRun) { delete Store.state.firstRun; Store.state.firstRunHandled = true; App.firstRun(); }
     else { App.showTab(Store.state.ui.tab || 'plan'); App.offerCleanup(); }
     if (root.Backup) root.Backup.init();

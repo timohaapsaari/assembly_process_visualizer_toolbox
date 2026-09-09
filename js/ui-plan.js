@@ -170,6 +170,13 @@
     conflicts.forEach(e => alerts.push({ cls: 'err', text: (e.resource.type === 'labor' ? 'Worker pool "' : 'Equipment "') + e.resource.name + '" (capacity ' + e.resource.capacity + ') is over capacity in the ' + mode.toUpperCase() + ' schedule: ' + e.conflicts.slice(0, 3).map(c => U.niceDateTime(c.a) + ' – ' + U.niceDateTime(c.b) + ' (' + c.load + ' needed)').join(', ') + (e.conflicts.length > 3 ? ' and ' + (e.conflicts.length - 3) + ' more' : '') + '. Competing lots are shown red in the resource occupancy chart; add capacity, change lot sizes or sequence the steps.' }));
     if (overload && overload.length) alerts.push({ cls: 'warn', text: 'Worker capacity (' + maxW + ') exceeded on ' + overload.map(d => U.niceDate(U.parseLocal(d.date)) + ' (' + d.peakWorkers + ')').join(', ') + '.' });
     if (res.recipe.expanded) alerts.unshift({ cls: 'info', text: 'Recipe chain: ' + res.recipe.subRecipes.map(x => '"' + x.recipe.name + '" (' + x.code + '.…) makes ' + ((pb[x.partId] || {}).itemNr || '')).join(', ') + '. Their steps are scheduled as part of this plan.' });
+    (res.recipe.unresolved || []).forEach(u => {
+      const p = pb[u.partId] || {};
+      let why;
+      if (!u.makers.length) why = 'no recipe has a step producing it, so it is treated as a purchased part. Create a recipe whose final product is this item, or set the part type to purchased.';
+      else why = 'recipe "' + u.makers[0].name + '" produces it in a step but ' + (u.makers[0].finalSet ? 'its final product is a different item. Chaining follows final products only: make this item the final product of its own recipe.' : 'that recipe has no final product selected; it could not be resolved automatically. Open it and set "Final product".');
+      alerts.push({ cls: 'warn', text: 'Not chained: ' + (p.itemNr || '?') + ' ' + (p.name || '') + ' (' + u.via + '): ' + why });
+    });
     html += alerts.map(a => '<div class="alert ' + a.cls + '">' + UI.esc(a.text) + '</div>').join('');
 
     // controls + gantt

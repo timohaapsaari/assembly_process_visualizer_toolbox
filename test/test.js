@@ -406,4 +406,18 @@ t('deliverable that is another recipe\'s final product is chained in with its qu
   assert.ok(res2.warnings.some(w => /not produced by any step or chained recipe/.test(w.text)));
   assert.strictEqual(res2.purchases.find(p => p.partId === 'sa').qty, 12);
 });
+
+t('chaining tolerates a sub-recipe without a selected final product and reports unresolved items', () => {
+  const partsC = Object.assign({}, parts, { sa: { id: 'sa', itemNr: 'SA-1', name: 'Sub-assembly', type: 'manufactured' }, zz: { id: 'zz', itemNr: 'ZZ', name: 'Nobody makes me', type: 'manufactured' } });
+  const rMain = { id: 'rm', name: 'Main', finalPartId: 'fin', deliverables: [{ partId: 'sa', qtyPerProduct: 6 }, { partId: 'zz', qtyPerProduct: 1 }], steps: [
+    { id: 'm1', nr: 10, name: 'Final assembly', type: 'assembly', outputPartId: 'fin', components: [{ partId: 'hous', qty: 1 }], workMinutes: 60, workers: 1 }] };
+  const rSA = { id: 'rs', name: 'Sub-assembly', finalPartId: null, steps: [
+    { id: 's1', nr: 10, name: 'Build', type: 'subassembly', outputPartId: null, components: [{ partId: 'seal', qty: 3 }], workMinutes: 10, workers: 1 },
+    { id: 's2', nr: 20, name: 'Test', type: 'test', outputPartId: 'sa', components: [], continuesPrevious: true, workMinutes: 5, workers: 1 }] };
+  const rx = S.expandRecipe(rMain, [rMain, rSA], partsC);
+  assert.strictEqual(rx.subRecipes.length, 1);
+  assert.strictEqual(rx.unresolved.length, 1);
+  assert.strictEqual(rx.unresolved[0].partId, 'zz');
+  assert.strictEqual(rx.unresolved[0].makers.length, 0);
+});
 console.log('\n' + passed + ' tests passed' + (process.exitCode ? ', some FAILED' : ''));

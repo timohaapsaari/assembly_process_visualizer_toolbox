@@ -231,6 +231,17 @@
    * pull that recipe's steps in (recursively). Returns a virtual recipe with all steps; sub-recipe steps get a
    * prefixed nr ("A2.10"), a name prefix, and sourceRecipeId / sourceStepId for editing.
    */
+  /** Final product of a recipe: the selected one, or the last produced item that no step of the recipe consumes. */
+  S.recipeFinalPart = function (r) {
+    if (!r) return null;
+    if (r.finalPartId) return r.finalPartId;
+    const steps = S.resolveRecipe(r).steps;
+    const consumed = new Set();
+    steps.forEach(s => (s.components || []).forEach(c => { if (c.partId !== s.outputPartId) consumed.add(c.partId); }));
+    const cands = steps.filter(s => s.outputPartId && !consumed.has(s.outputPartId));
+    return cands.length ? cands[cands.length - 1].outputPartId : null;
+  };
+
   S.expandRecipe = function (recipe, allRecipes, partsById) {
     if (!recipe) return recipe;
     const visited = new Set([recipe.id]);
@@ -259,7 +270,8 @@
       (recipe.deliverables || []).forEach(d => needed.push(d.partId));
       for (const pid of needed) {
         if (!pid || produced.has(pid)) continue;
-        const sub = (allRecipes || []).find(r => !visited.has(r.id) && r.finalPartId === pid && r.id !== recipe.id);
+        let sub = (allRecipes || []).find(r => !visited.has(r.id) && r.id !== recipe.id && r.finalPartId === pid);
+        if (!sub) sub = (allRecipes || []).find(r => !visited.has(r.id) && r.id !== recipe.id && !r.finalPartId && S.recipeFinalPart(r) === pid);
         if (!sub) continue;
         visited.add(sub.id);
         const code = makeCode(sub.name);
@@ -270,7 +282,20 @@
         break;
       }
     }
-    return Object.assign({}, recipe, { steps, subRecipes, expanded: subRecipes.length > 0 });
+    // diagnostics for parts that could not be chained
+    const producedFinal = new Set(S.resolveRecipe({ id: recipe.id, steps }).steps.map(s => s.outputPartId).filter(Boolean));
+    const unresolved = [];
+    const seen = new Set();
+    const consider = (pid, via) => {
+      if (!pid || producedFinal.has(pid) || seen.has(pid)) return; seen.add(pid);
+      const p = partsById && partsById[pid];
+      if (p && p.type === 'purchased') return;
+      const makers = (allRecipes || []).filter(r => r.id !== recipe.id && S.resolveRecipe(r).steps.some(s => s.outputPartId === pid));
+      unresolved.push({ partId: pid, via, makers: makers.map(r => ({ id: r.id, name: r.name, isFinal: r.finalPartId === pid, finalSet: !!r.finalPartId })) });
+    };
+    steps.forEach(s => (s.components || []).forEach(c => consider(c.partId, 'component of step ' + s.nr)));
+    (recipe.deliverables || []).forEach(d => consider(d.partId, 'delivered separately'));
+    return Object.assign({}, recipe, { steps, subRecipes, expanded: subRecipes.length > 0, unresolved });
   };
 
   /** Split [a,b] into working windows (for drawing bars that skip nights/weekends). */
