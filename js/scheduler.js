@@ -281,7 +281,9 @@
         visited.add(sub.id);
         const code = makeCode(sub.name);
         subRecipes.push({ recipe: sub, code, partId: pid, viaPlaceholder: ph.map(s => s.nr) });
-        clone(sub, code).forEach(x => steps.push(x));
+        const cloned = clone(sub, code);
+        if (ph.length) { const at = Math.min.apply(null, ph.map(s => steps.indexOf(s))); steps.splice.apply(steps, [at, 0].concat(cloned)); } // before the placeholder, so it runs after the chain
+        else cloned.forEach(x => steps.push(x));
         // the placeholder step becomes a follow-on operation on the sub-recipe's output (pass-through)
         ph.forEach(s => { s.components = [{ partId: pid, qty: 1, implicit: true }]; s._chainedIn = sub.id; });
         produced.add(pid);
