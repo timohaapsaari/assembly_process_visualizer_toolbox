@@ -396,6 +396,18 @@
       r.subProc = (t, h) => !h ? new Date(t) : (procCalObj ? procCalObj.subtractWorking(t, h * 60) : new Date(t.getTime() - h * 3600000));
     });
 
+    // link steps are transparent to lots: they hand over lot by lot exactly as the chained recipe's last step does
+    Object.values(rows).forEach(r => {
+      if (!r.link) return;
+      const p = r.preds.map(id => rows[id]).find(x => x && x.step.outputPartId === r.step.outputPartId);
+      if (!p) return;
+      r.lotSize = p.lotSize; r.transfer = true;
+      const lots = S.lots(r.units, r.lotSize);
+      r.lotsE = lots.map(l => ({ units: l.units, cum: l.cum, goodCum: l.cum }));
+      r.lotsL = lots.map(l => ({ units: l.units, cum: l.cum, goodCum: l.cum }));
+      r.nLots = lots.length; r.waves = 1;
+    });
+
     // quantity of predecessor output needed per unit of successor output (undefined = no part relation)
     const qtyPerUnit = (pred, succ) => {
       if (!pred.step.outputPartId) return undefined;

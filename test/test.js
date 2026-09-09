@@ -466,4 +466,20 @@ t('successor starts when enough pieces exist: lots of 50, 162 total, 27 per unit
   assert.ok(res2.rows.fin.ES >= res2.rows.sub.EF);
   assert.ok(res.rows.fin.ES < res2.rows.fin.ES);
 });
+
+t('lot hand-over passes through a link step into the higher-level recipe', () => {
+  const partsC = Object.assign({}, parts, { sa: { id: 'sa', itemNr: 'SA', name: 'Sub-assembly', type: 'manufactured' } });
+  const rMain = { id: 'rm', name: 'Main', finalPartId: 'fin', steps: [
+    { id: 'lnk', nr: 10, name: 'Sub-assemblies', type: 'subassembly', outputPartId: 'sa', components: [], workMinutes: 999, workers: 1 },
+    { id: 'fin', nr: 20, name: 'Final assembly', type: 'assembly', outputPartId: 'fin', components: [{ partId: 'sa', qty: 27 }], workMinutes: 60, workers: 1, lotSize: 1 }] };
+  const rSub = { id: 'rs', name: 'Sub', finalPartId: 'sa', steps: [
+    { id: 'b', nr: 10, name: 'Build', type: 'subassembly', outputPartId: 'sa', components: [{ partId: 'seal', qty: 1 }], workMinutes: 2, workers: 2, fixedMinutes: 10, lotSize: 50, transferPerLot: true }] };
+  const rx = S.expandRecipe(rMain, [rMain, rSub], partsC);
+  const res = S.schedule({ recipe: rx, partsById: partsC, qty: 6, due: new Date(2026, 9, 30, 15, 30), planStart: mon, calendar: cal });
+  const b = res.rows['rs:b'], fin = res.rows.fin, lnk = res.rows.lnk;
+  assert.strictEqual(lnk.link, true);
+  assert.strictEqual(b.units, 162);
+  assert.ok(fin.lotsE[0].attStart < b.lotsE[1].procEnd, 'final unit 1 should start after the first lot of 50, got ' + U.isoDateTime(fin.lotsE[0].attStart) + ' vs lot2 end ' + U.isoDateTime(b.lotsE[1].procEnd));
+  assert.ok(fin.lotsE[0].attStart >= b.lotsE[0].procEnd);
+});
 console.log('\n' + passed + ' tests passed' + (process.exitCode ? ', some FAILED' : ''));
