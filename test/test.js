@@ -284,4 +284,17 @@ t('worker pool on a two-shift calendar works evenings, one-shift pool does not',
   assert.strictEqual(U.isoDateTime(res.rows.t.ES), '2026-09-14 15:30');       // testers keep going in the evening
   assert.strictEqual(U.isoDateTime(res.rows.t.EworkEnd), '2026-09-15 08:00'); // 15:30-18:00 + 18:30-22:00 = 6 h, remaining 2 h from 06:00 next day
 });
+
+t('deliverables: item delivered separately gets qty per product', () => {
+  const r9 = JSON.parse(JSON.stringify(recipe));
+  r9.steps.push({ id: 'k', nr: 40, name: 'Loader', type: 'assembly', outputPartId: 'seal', components: [{ partId: 'hous', qty: 1 }], workMinutes: 10, workers: 1 });
+  // 'seal' is also consumed by s1 (2 per piston) -> demand from tree + 6 per product delivered separately
+  r9.deliverables = [{ partId: 'seal', qtyPerProduct: 6 }];
+  const ex = S.explode(r9, parts, 10);
+  assert.strictEqual(ex.units.k, 20 + 60);
+  assert.ok(!ex.warnings.some(w => /not used/.test(w.text)));
+  delete r9.deliverables;
+  const ex2 = S.explode(r9, parts, 10);
+  assert.strictEqual(ex2.units.k, 20); // consumed by s1 so no orphan rule
+});
 console.log('\n' + passed + ' tests passed' + (process.exitCode ? ', some FAILED' : ''));

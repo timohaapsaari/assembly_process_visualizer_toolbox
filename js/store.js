@@ -52,6 +52,7 @@
         this.applyDefaultsToAll(false);
       }
       if (st.resources.length) st.settings.stdResourcesSeeded = true;
+      (st.recipes || []).forEach(r => { if (!Array.isArray(r.deliverables)) r.deliverables = []; });
       (st.recipes || []).forEach(r => (r.steps || []).forEach(s => {
         if (s.processHours == null) { s.processHours = U.num(s.cureHours, 0); }
         delete s.cureHours;
@@ -236,7 +237,12 @@
       return Object.assign({ id: U.uid('s'), nr: 10, name: '', type: 'assembly', outputPartId: null, components: [],
         workMinutes: 0, workers: 1, fixedMinutes: 0, processHours: 0, resourceId: null, lotSize: 0, workerPoolId: null, transferPerLot: false, yieldPct: 100, extraPreds: [], notes: '' }, o || {});
     },
-    newRecipe(o) { return Object.assign({ id: U.uid('r'), name: '', finalPartId: null, steps: [], notes: '' }, o || {}); },
+    newRecipe(o) { return Object.assign({ id: U.uid('r'), name: '', finalPartId: null, deliverables: [], steps: [], notes: '' }, o || {}); },
+    /** Mark a part as delivered separately with a quantity per product (0 removes it). */
+    setDeliverable(recipe, partId, qtyPerProduct) {
+      recipe.deliverables = (recipe.deliverables || []).filter(d => d.partId !== partId);
+      if (U.num(qtyPerProduct) > 0) recipe.deliverables.push({ partId, qtyPerProduct: U.num(qtyPerProduct) });
+    },
     addRecipe(o) { const r = this.newRecipe(o); this.state.recipes.push(r); return r; },
     recipe(id) { return this.state.recipes.find(r => r.id === id); },
     nextStepNr(recipe) { return recipe.steps.length ? Math.max.apply(null, recipe.steps.map(s => U.num(s.nr))) + 10 : 10; },

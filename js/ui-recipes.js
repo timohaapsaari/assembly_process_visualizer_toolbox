@@ -60,12 +60,14 @@
       '<label class="f"><span>Recipe name</span><input type="text" id="r-name" class="w-l" value="' + UI.esc(r.name) + '"></label>' +
       '<label class="f"><span>Final product (output of the last step)</span><span id="r-final"></span></label>' +
       '<label class="f grow"><span>Notes</span><input type="text" id="r-notes" style="width:100%" value="' + UI.esc(r.notes || '')+ '"></label>' +
-      '</div><div id="r-validation"></div></div>');
+      '</div><div class="form-row" style="align-items:center"><b class="small">Delivered separately</b><span class="muted small">items that are not built into the final product but shipped with it (or on their own); quantity per product</span><span id="r-deliv" class="flex"></span></div>' +
+      '<div id="r-validation"></div></div>');
     host.appendChild(head);
     UI.bind(head.querySelector('#r-name'), r, 'name', 'text', () => { const o = top.querySelector('#r-sel option:checked'); if (o) o.textContent = r.name + ' · ' + r.steps.length + ' steps'; });
     UI.bind(head.querySelector('#r-notes'), r, 'notes');
     const fp = UI.partPicker({ value: r.finalPartId, filter: p => p.type === 'manufactured' || !r.finalPartId, onPick: p => { r.finalPartId = p.id; if (p.type !== 'manufactured') { p.type = 'manufactured'; } Store.save(); RecipesUI.refresh(); } });
     head.querySelector('#r-final').appendChild(fp);
+    RecipesUI.renderDeliverables(r, head.querySelector('#r-deliv'));
 
     // steps
     const body = UI.el('<div class="grid-2" style="grid-template-columns: 1.6fr 1fr"><div><div class="panel"><div class="panel-head"><h3>Steps</h3><span class="muted small">Drag ⋮⋮ to reorder. Dependencies are derived automatically from parts: a step that uses the output of another step comes after it.</span><span class="spacer"></span><button class="btn btn-sm" id="s-defaults" title="Fill empty worker pool / equipment fields from the step-type defaults (Resources tab)">Apply resource defaults</button><button class="btn btn-sm" id="s-renum">Renumber</button><button class="btn btn-primary btn-sm" id="s-add">+ Add step</button></div><div class="step-list" id="steps"></div><div class="flex mt"><button class="btn" id="s-add2">+ Add step</button></div></div></div>' +
@@ -128,6 +130,13 @@
       '<label class="f mt"><span>Notes / instructions</span><input type="text" class="notes" style="width:100%" value="' + UI.esc(s.notes || '') + '"></label>' +
       '</div></div>' +
       '<div class="summary"></div><div class="deps"></div></div>');
+    card.addEventListener('click', e => {
+      const b = e.target.closest('button[data-deliver]'); if (!b) return;
+      const cur = ((r.deliverables || []).find(d => d.partId === s.outputPartId) || {}).qtyPerProduct || 1;
+      const v = prompt('Pieces of this output delivered separately, per product:', cur);
+      if (v === null) return;
+      Store.setDeliverable(r, s.outputPartId, U.num(v, 0)); Store.save(); RecipesUI.render();
+    });
 
     const refresh = () => RecipesUI.refresh();
     const nrI = card.querySelector('.nr');
@@ -288,7 +297,13 @@
       const per10 = (() => { if (!res || !lt.lotSize) return ''; const lots = Math.ceil(10 / lt.lotSize), waves = Math.ceil(lots / res.capacity); return ' · 10 pcs = ' + lots + ' lot' + (lots > 1 ? 's' : '') + ' in ' + waves + ' wave' + (waves > 1 ? 's' : ''); })();
       const yTxt = Scheduler.yieldOf(s) < 1 ? ' · <b style="color:var(--danger)">yield ' + Math.round(Scheduler.yieldOf(s) * 100) + '%</b> → start ' + units + ' to get ' + (ex.good[s.id] || 1) : '';
       card.querySelector('.summary').innerHTML = 'Per product: <b>' + U.minutesToText(wm) + '</b> attended work' + (U.num(s.workers, 1) > 1 ? ' with ' + s.workers + ' workers' : '') + ' (' + U.round(Scheduler.stepLaborHours(s, units, res), 2) + ' labor h)' + (U.num(s.processHours) ? ' + <b style="color:var(--cure)">' + U.hoursToText(U.num(s.processHours)) + ' process per lot</b>' : '') + (units !== 1 && Scheduler.yieldOf(s) >= 1 ? ' · ' + units + ' units per product' : '') + yTxt + lotTxt + per10;
-      card.querySelector('.deps').innerHTML = (preds.length ? 'After: <b>' + preds.map(p => UI.esc(p.nr + ' ' + p.name)).join(', ') + '</b>' : '<span class="badge">start step</span>') + (succs.length ? ' &nbsp;→ Before: <b>' + succs.map(p => UI.esc(p.nr + ' ' + p.name)).join(', ') + '</b>' : (s.outputPartId === r.finalPartId ? ' &nbsp;<span class="badge ok">final step</span>' : ''));
+      const deliv = (r.deliverables || []).find(d => d.partId === s.outputPartId);
+      const isFinal = s.outputPartId === r.finalPartId;
+      const orphan = s.outputPartId && !succs.length && !isFinal;
+      card.querySelector('.deps').innerHTML = (preds.length ? 'After: <b>' + preds.map(p => UI.esc(p.nr + ' ' + p.name)).join(', ') + '</b>' : '<span class="badge">start step</span>') +
+        (succs.length ? ' &nbsp;→ Before: <b>' + succs.map(p => UI.esc(p.nr + ' ' + p.name)).join(', ') + '</b>' : (isFinal ? ' &nbsp;<span class="badge ok">final step</span>' : '')) +
+        (deliv ? ' &nbsp;<span class="badge ok">delivered separately: ' + deliv.qtyPerProduct + ' per product</span> <button class="btn btn-sm" data-deliver="1">change</button>' :
+          (orphan ? ' &nbsp;<span class="badge warn">output not used by any step</span> <button class="btn btn-sm" data-deliver="1" title="This output is shipped separately; set how many per product">Deliver separately…</button>' : ''));
     });
 
     // validation
@@ -316,6 +331,24 @@
     side.innerHTML = html;
   };
 
+  RecipesUI.renderDeliverables = function (r, host) {
+    host.innerHTML = '';
+    const pb = Store.partsById();
+    (r.deliverables || []).forEach(d => {
+      const p = pb[d.partId];
+      const chip = UI.el('<span class="chip"><span class="mono">' + (p ? UI.esc(p.itemNr) : '?') + '</span> ' + UI.esc(p ? p.name.slice(0, 30) : '') + ' ×<input type="number" min="0" step="1" value="' + d.qtyPerProduct + '" title="pieces per product"><span class="x" title="Remove">✕</span></span>');
+      chip.querySelector('input').addEventListener('change', e => { Store.setDeliverable(r, d.partId, U.num(e.target.value, 0)); Store.save(); RecipesUI.render(); });
+      chip.querySelector('.x').addEventListener('click', () => { Store.setDeliverable(r, d.partId, 0); Store.save(); RecipesUI.render(); });
+      host.appendChild(chip);
+    });
+    const produced = Array.from(new Set(r.steps.map(s => s.outputPartId).filter(pid => pid && pid !== r.finalPartId && !(r.deliverables || []).some(d => d.partId === pid))));
+    if (produced.length) {
+      const sel = UI.el('<select><option value="">+ add item delivered separately…</option>' + produced.map(pid => '<option value="' + pid + '">' + UI.esc((pb[pid] || {}).itemNr + ' – ' + (pb[pid] || {}).name) + '</option>').join('') + '</select>');
+      sel.addEventListener('change', () => { if (sel.value) { Store.setDeliverable(r, sel.value, 1); Store.save(); RecipesUI.render(); } });
+      host.appendChild(sel);
+    } else if (!(r.deliverables || []).length) host.appendChild(UI.el('<span class="muted small">none</span>'));
+  };
+
   RecipesUI.structureHtml = function (r, g, pb) {
     if (!r.finalPartId) return '<p class="muted small">Select a final product first.</p>';
     const producersOf = pid => (g.producers[pid] || []).map(id => g.byId[id]);
@@ -335,7 +368,7 @@
       }
       return html;
     };
-    return '<ul class="small" style="margin:4px 0 0 16px;padding:0;line-height:1.6">' + node(r.finalPartId, 1, 0) + '</ul>';
+    return '<ul class="small" style="margin:4px 0 0 16px;padding:0;line-height:1.6">' + node(r.finalPartId, 1, 0) + (r.deliverables || []).map(d => node(d.partId, d.qtyPerProduct, 0).replace('<li>', '<li><span class="badge">delivered separately</span> ')).join('') + '</ul>';
   };
 
   root.RecipesUI = RecipesUI;

@@ -127,6 +127,10 @@
     const finalId = recipe.finalPartId;
     if (finalId) demand[finalId] = qty;
     else warnings.push({ level: 'error', text: 'Recipe has no final product part selected.' });
+    // items delivered separately: quantity per product
+    const deliverables = (recipe.deliverables || []).filter(d => d.partId && U.num(d.qtyPerProduct) > 0);
+    deliverables.forEach(d => { demand[d.partId] = (demand[d.partId] || 0) + qty * U.num(d.qtyPerProduct); });
+    const isDeliverable = pid => pid === finalId || deliverables.some(d => d.partId === pid);
     (extraDemand || []).forEach(e => { if (e.partId && U.num(e.qty) > 0) demand[e.partId] = (demand[e.partId] || 0) + U.num(e.qty); });
 
     const producedParts = new Set(Object.keys(graph.producers));
@@ -136,9 +140,9 @@
       const s = graph.byId[sid];
       let g;
       if (s.outputPartId && demand[s.outputPartId] != null) g = demand[s.outputPartId];
-      else if (s.outputPartId && s.outputPartId !== finalId && graph.succs[sid].size === 0) {
+      else if (s.outputPartId && !isDeliverable(s.outputPartId) && graph.succs[sid].size === 0) {
         g = qty; // orphan output: assume one per product
-        warnings.push({ level: 'warn', text: 'Step ' + s.nr + ' "' + s.name + '": output is not used by any other step and is not the final product. Assuming ' + qty + ' pcs.' });
+        warnings.push({ level: 'warn', text: 'Step ' + s.nr + ' "' + s.name + '": output is not used by any other step and is not listed as a deliverable. Assuming 1 per product; add it under "Delivered separately" to set the quantity.' });
       } else g = demand[s.outputPartId] != null ? demand[s.outputPartId] : qty;
       // yield: start enough units so that `g` good ones come out (scrap model: failed units are lost)
       const y = S.yieldOf(s);
