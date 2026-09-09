@@ -297,4 +297,23 @@ t('deliverables: item delivered separately gets qty per product', () => {
   const ex2 = S.explode(r9, parts, 10);
   assert.strictEqual(ex2.units.k, 20); // consumed by s1 so no orphan rule
 });
+
+t('pass-through chain: assembly -> dispensing -> curing -> testing on one item', () => {
+  const r10 = { id: 'r10', name: 'Chain', finalPartId: 'fin', steps: [
+    { id: 'a', nr: 10, name: 'Assembly', type: 'assembly', outputPartId: 'fin', components: [{ partId: 'hous', qty: 1 }, { partId: 'seal', qty: 2 }], workMinutes: 30, workers: 1 },
+    { id: 'd', nr: 20, name: 'Dispensing', type: 'bonding', outputPartId: 'fin', components: [{ partId: 'fin', qty: 1 }], workMinutes: 5, workers: 1, transferPerLot: true, lotSize: 1 },
+    { id: 'c', nr: 30, name: 'Curing', type: 'bonding', outputPartId: 'fin', components: [{ partId: 'fin', qty: 1 }], workMinutes: 1, workers: 1, processHours: 12, resourceId: 'oven', transferPerLot: true },
+    { id: 't', nr: 40, name: 'Testing', type: 'test', outputPartId: 'fin', components: [{ partId: 'fin', qty: 1 }], workMinutes: 10, workers: 1, yieldPct: 90 }
+  ] };
+  const g = S.buildGraph(r10, parts);
+  assert.deepStrictEqual(g.order, ['a', 'd', 'c', 't']);
+  assert.strictEqual(g.cycle, false);
+  assert.ok(g.preds.t.has('c') && g.preds.c.has('d') && g.preds.d.has('a'));
+  const res = S.schedule({ recipe: r10, partsById: parts, resourcesById: resources, qty: 9, due: fri, planStart: mon, calendar: cal });
+  assert.strictEqual(res.rows.t.units, 10);   // 9 good out of 90 %
+  assert.strictEqual(res.rows.a.units, 10);   // assembly builds 10
+  assert.strictEqual(res.purchases.find(p => p.partId === 'seal').qty, 20);
+  assert.ok(res.rows.t.ES >= res.rows.c.EF - 60000);
+  assert.ok(!res.warnings.length, JSON.stringify(res.warnings));
+});
 console.log('\n' + passed + ' tests passed' + (process.exitCode ? ', some FAILED' : ''));
