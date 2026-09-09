@@ -15,19 +15,20 @@
       '<p class="muted small">Drop an ERP export here. Delimiter (, ; tab) and decimal comma are detected automatically. Columns are matched by name; you can adjust the mapping before importing. Parts referenced by steps but missing from the parts list are created automatically.</p>' +
       '<div class="dropzone" id="dz">Drop a .csv / .txt file here, or <label style="color:var(--accent);cursor:pointer"><u>choose a file</u><input type="file" id="fileIn" accept=".csv,.txt,.tsv,text/csv" class="hidden"></label><br><span class="small">or paste CSV text below</span></div>' +
       '<textarea id="csvText" class="mono mt" placeholder="item_nr;name;type;work_minutes;lead_time_days" style="min-height:90px"></textarea>' +
-      '<div class="flex mt"><button class="btn btn-primary" id="parseBtn">Preview</button><span class="muted small">Templates: <a href="#" data-tpl="parts">parts.csv</a> · <a href="#" data-tpl="steps">steps.csv</a> · <a href="#" data-tpl="bom">bom.csv</a></span></div>' +
+      '<div class="flex mt"><button class="btn btn-primary" id="parseBtn">Preview</button><span class="muted small">Templates: <a href="#" data-tpl="parts">parts.csv</a> · <a href="#" data-tpl="resources">resources.csv</a> · <a href="#" data-tpl="steps">steps.csv</a> · <a href="#" data-tpl="bom">bom.csv</a></span></div>' +
       '<div id="preview" class="mt"></div>' +
       '</div>' +
       '<div><div class="panel"><div class="panel-head"><h2>Export</h2></div>' +
       '<div class="form-row"><label class="f"><span>CSV delimiter</span><select id="delim"><option value=";">; (Excel, Finnish locale)</option><option value=",">, (comma)</option><option value="\t">Tab</option></select></label></div>' +
-      '<div class="flex"><button class="btn" data-exp="parts">Parts CSV</button><button class="btn" data-exp="steps">Steps CSV (all recipes)</button><button class="btn" data-exp="bom">BOM lines CSV</button></div>' +
+      '<div class="flex"><button class="btn" data-exp="parts">Parts CSV</button><button class="btn" data-exp="resources">Resources CSV</button><button class="btn" data-exp="steps">Steps CSV (all recipes)</button><button class="btn" data-exp="bom">BOM lines CSV</button></div>' +
       '<hr style="border:0;border-top:1px solid var(--border);margin:14px 0">' +
       '<div class="flex"><button class="btn btn-primary" id="expJson">Download full backup (JSON)</button><label class="btn">Restore backup (JSON)<input type="file" id="jsonIn" accept=".json,application/json" class="hidden"></label></div>' +
       '<p class="muted small mt">The JSON backup contains parts, recipes, plans and calendar settings. Restoring merges by item nr / recipe name, or replaces everything if you choose so.</p>' +
       '</div>' +
       '<div class="panel help"><h3>CSV formats</h3>' +
       '<p><b>parts.csv</b> — one row per item: <code>item_nr, name, type (purchased|manufactured), unit, work_minutes, lead_time_days, notes</code></p>' +
-      '<p><b>steps.csv</b> — one row per routing step: <code>recipe, step_nr, step_name, step_type, output_item_nr, components, work_minutes, workers, fixed_minutes, cure_hours, predecessors, notes</code>. <code>components</code> is <code>ITEM:qty|ITEM:qty</code>. <code>predecessors</code> lists extra step numbers (dependencies through parts are automatic).</p>' +
+      '<p><b>resources.csv</b> — equipment and worker pools: <code>name, type (equipment|labor), capacity, lot_size, process_hours, calendar (24/7|shop), notes</code></p>' +
+      '<p><b>steps.csv</b> — one row per routing step: <code>recipe, step_nr, step_name, step_type, output_item_nr, components, work_minutes, workers, worker_pool, fixed_minutes, process_hours, resource, lot_size, transfer_per_lot, predecessors, notes</code>. <code>components</code> is <code>ITEM:qty|ITEM:qty</code>. <code>resource</code> and <code>worker_pool</code> are resource names (created if missing). <code>predecessors</code> lists extra step numbers (dependencies through parts are automatic).</p>' +
       '<p><b>bom.csv</b> — one row per component line (alternative to the inline components column): <code>recipe, step_nr, component_item_nr, qty</code></p>' +
       '<p>Step types: assembly, subassembly, bonding, test, inspection, packaging, other. Finnish and common ERP header names (e.g. <code>nimike</code>, <code>työaika</code>, <code>Operation No</code>, <code>Setup time</code>) are recognised too.</p>' +
       '</div></div></div>');
@@ -45,7 +46,7 @@
     panel.querySelectorAll('[data-exp]').forEach(b => b.addEventListener('click', () => {
       const d = panel.querySelector('#delim').value;
       const k = b.dataset.exp;
-      const text = k === 'parts' ? CSV.exportParts(d) : k === 'steps' ? CSV.exportSteps(st.recipes, d) : CSV.exportBOM(st.recipes, d);
+      const text = k === 'parts' ? CSV.exportParts(d) : k === 'resources' ? CSV.exportResources(d) : k === 'steps' ? CSV.exportSteps(st.recipes, d) : CSV.exportBOM(st.recipes, d);
       UI.download(k + '_' + U.isoDate(new Date()) + '.csv', text);
     }));
     panel.querySelector('#expJson').addEventListener('click', () => UI.download('assembly_planner_backup_' + U.isoDate(new Date()) + '.json', Store.exportJSON(), 'application/json'));
@@ -69,7 +70,8 @@
   DataUI.template = function (ds) {
     const t = {
       parts: 'item_nr;name;type;unit;work_minutes;lead_time_days;notes\r\nP-1001;Cylinder housing, machined;purchased;pcs;0;21;\r\nS-3004;Cylinder assembly;manufactured;pcs;45;0;\r\n',
-      steps: 'recipe;step_nr;step_name;step_type;output_item_nr;components;work_minutes;workers;fixed_minutes;cure_hours;predecessors;notes\r\nHA-200;10;Bond piston to rod;bonding;S-3001;P-1002:1|P-1003:1|P-1020:0.05;25;1;15;12;;Cure 12 h\r\nHA-200;40;Assemble cylinder;subassembly;S-3004;P-1001:1|S-3001:1|P-1010:1;45;2;20;0;;\r\nHA-200;60;Pressure test;test;S-3004;S-3004:1;20;1;45;0;40;\r\n',
+      steps: 'recipe;step_nr;step_name;step_type;output_item_nr;components;work_minutes;workers;worker_pool;fixed_minutes;process_hours;resource;lot_size;transfer_per_lot;predecessors;notes\r\nHA-200;10;Bond piston to rod;bonding;S-3001;P-1002:1|P-1003:1|P-1020:0.05;25;1;Assemblers;5;12;Bonding fixtures;;yes;;Cure 12 h per fixture\r\nHA-200;40;Assemble cylinder;subassembly;S-3004;P-1001:1|S-3001:1|P-1010:1;45;2;Assemblers;20;0;;4;yes;;\r\nHA-200;60;Pressure test;test;S-3004;S-3004:1;10;1;Test technicians;0;0.5;Pressure test bench;;yes;40;\r\n',
+      resources: 'name;type;capacity;lot_size;process_hours;calendar;notes\r\nBonding fixtures;equipment;6;1;12;24/7;One rod per fixture\r\nTest cabinet 1;equipment;1;10;6;24/7;\r\nAssemblers;labor;3;;;;\r\n',
       bom: 'recipe;step_nr;component_item_nr;qty\r\nHA-200;10;P-1002;1\r\nHA-200;10;P-1003;1\r\nHA-200;40;P-1001;1\r\n'
     }[ds];
     UI.download(ds + '_template.csv', t);
@@ -118,10 +120,12 @@
         Store.save();
         let msg = 'Imported: ' + report.added + ' added, ' + report.updated + ' updated.';
         if (report.createdParts.length) msg += ' Created ' + report.createdParts.length + ' missing part(s): ' + report.createdParts.slice(0, 6).join(', ') + (report.createdParts.length > 6 ? '…' : '') + '.';
+        if (report.createdResources && report.createdResources.length) msg += ' Created resource(s): ' + report.createdResources.join(', ') + ' (check capacity and lot size on the Resources tab).';
         if (report.recipes.length) msg += ' New recipe(s): ' + report.recipes.join(', ') + '.';
         prev.innerHTML = '<div class="alert ok">' + UI.esc(msg) + '</div>' + (report.errors.length ? '<div class="alert warn"><ul>' + report.errors.slice(0, 20).map(e => '<li>' + UI.esc(e) + '</li>').join('') + '</ul></div>' : '') +
-          '<div class="flex"><button class="btn" id="goParts">Open Parts</button><button class="btn" id="goRecipes">Open Recipes</button></div>';
+          '<div class="flex"><button class="btn" id="goParts">Open Parts</button><button class="btn" id="goRes">Open Resources</button><button class="btn" id="goRecipes">Open Recipes</button></div>';
         prev.querySelector('#goParts').addEventListener('click', () => root.App.showTab('parts'));
+        prev.querySelector('#goRes').addEventListener('click', () => root.App.showTab('resources'));
         prev.querySelector('#goRecipes').addEventListener('click', () => root.App.showTab('recipes'));
         document.getElementById('csvText').value = '';
         UI.toast('Import done', 'ok');

@@ -111,8 +111,14 @@
       '<div class="times">' +
       '<label class="f"><span>Work time / unit (min)</span><input type="number" class="work" min="0" step="0.5" value="' + U.num(s.workMinutes) + '"></label>' +
       '<label class="f"><span>Workers</span><input type="number" class="workers w-s" min="1" step="1" value="' + Math.max(1, U.num(s.workers, 1)) + '"></label>' +
-      '<label class="f"><span>Fixed time / run (min)</span><input type="number" class="fixed" min="0" step="5" value="' + U.num(s.fixedMinutes) + '" title="Setup, test-rig time or any time that does not scale with quantity"></label>' +
-      '<label class="f"><span>Cure / wait (h)</span><input type="number" class="cure" min="0" step="0.5" value="' + U.num(s.cureHours) + '" title="Calendar time after the work, e.g. adhesive curing. No workers needed."></label>' +
+      '<label class="f"><span>from pool</span><select class="pool"><option value="">general</option>' + Store.laborPools().map(x => '<option value="' + x.id + '"' + (x.id === s.workerPoolId ? ' selected' : '') + '>' + UI.esc(x.name) + ' (' + x.capacity + ')</option>').join('') + '</select></label>' +
+      '<label class="f"><span>Fixed time / lot (min)</span><input type="number" class="fixed" min="0" step="5" value="' + U.num(s.fixedMinutes) + '" title="Setup, loading or test-rig time per lot that does not scale with quantity"></label>' +
+      '</div>' +
+      '<div class="times mt">' +
+      '<label class="f"><span>Process resource (fixtures, oven, chamber…)</span><select class="res"><option value="">none</option>' + Store.equipment().map(x => '<option value="' + x.id + '"' + (x.id === s.resourceId ? ' selected' : '') + '>' + UI.esc(x.name) + ' (' + x.capacity + ' × ' + (U.num(x.lotSize) || '∞') + ')</option>').join('') + '</select></label>' +
+      '<label class="f"><span>Lot size (pcs)</span><input type="number" class="lot w-s" min="0" step="1" value="' + U.num(s.lotSize) + '" placeholder="auto" title="Pieces per lot. 0 = from resource, or whole batch if no resource."></label>' +
+      '<label class="f"><span>Process / cure time per lot (h)</span><input type="number" class="cure" min="0" step="0.25" value="' + U.num(s.processHours) + '" title="Unattended time after the attended work: curing, potting, test cycle, burn-in. No workers needed."></label>' +
+      '<label class="check" style="align-self:flex-end;padding-bottom:6px" title="Next step may start on the first finished lot instead of waiting for the whole batch"><input type="checkbox" class="transfer" ' + (s.transferPerLot ? 'checked' : '') + '> next step per lot</label>' +
       '</div>' +
       '<label class="f mt"><span>Also after (extra predecessors)</span><div class="preds"></div></label>' +
       '<label class="f mt"><span>Notes / instructions</span><input type="text" class="notes" style="width:100%" value="' + UI.esc(s.notes || '') + '"></label>' +
@@ -128,7 +134,19 @@
     UI.bind(card.querySelector('.work'), s, 'workMinutes', 'num', refresh);
     UI.bind(card.querySelector('.workers'), s, 'workers', 'int', v => { if (v < 1) { s.workers = 1; card.querySelector('.workers').value = 1; Store.save(); } refresh(); });
     UI.bind(card.querySelector('.fixed'), s, 'fixedMinutes', 'num', refresh);
-    UI.bind(card.querySelector('.cure'), s, 'cureHours', 'num', refresh);
+    UI.bind(card.querySelector('.cure'), s, 'processHours', 'num', refresh);
+    UI.bind(card.querySelector('.lot'), s, 'lotSize', 'num', refresh);
+    UI.bind(card.querySelector('.transfer'), s, 'transferPerLot', 'bool', refresh);
+    const poolSel = card.querySelector('.pool');
+    poolSel.addEventListener('change', () => { s.workerPoolId = poolSel.value || null; Store.save(); refresh(); });
+    const resSel = card.querySelector('.res');
+    resSel.addEventListener('change', () => {
+      s.resourceId = resSel.value || null;
+      const res = Store.resourcesById()[s.resourceId];
+      if (res && !U.num(s.processHours) && U.num(res.processHours)) { s.processHours = res.processHours; card.querySelector('.cure').value = res.processHours; }
+      if (res && !s.transferPerLot && U.num(res.lotSize) > 0) { s.transferPerLot = true; card.querySelector('.transfer').checked = true; }
+      Store.save(); refresh();
+    });
     UI.bind(card.querySelector('.notes'), s, 'notes');
 
     // output picker
@@ -238,7 +256,7 @@
   /* Recompute derived info (dependencies, durations, validation, side panel) without rebuilding inputs. */
   RecipesUI.refresh = function () {
     const r = currentRecipe(); if (!r) return;
-    const pb = Store.partsById();
+    const pb = Store.partsById(), rb = Store.resourcesById();
     const g = Scheduler.buildGraph(r, pb);
     const ex = Scheduler.explode(r, pb, 1, g);
     const opt = document.querySelector('#r-sel option:checked'); if (opt) opt.textContent = (r.name || '(unnamed)') + ' · ' + r.steps.length + ' steps';
@@ -246,10 +264,16 @@
     r.steps.forEach(s => {
       const card = document.querySelector('.step-card[data-id="' + s.id + '"]'); if (!card) return;
       const units = ex.units[s.id] || 1;
-      const wm = Scheduler.stepWorkMinutes(s, units);
+      const res = rb[s.resourceId];
+      const wm = Scheduler.stepWorkMinutes(s, units, res);
+      const lt = Scheduler.lotting(s, res);
       const preds = Array.from(g.preds[s.id] || []).map(id => g.byId[id]).sort((a, b) => U.num(a.nr) - U.num(b.nr));
       const succs = Array.from(g.succs[s.id] || []).map(id => g.byId[id]).sort((a, b) => U.num(a.nr) - U.num(b.nr));
-      card.querySelector('.summary').innerHTML = 'Per product: <b>' + U.minutesToText(wm) + '</b> elapsed work' + (U.num(s.workers, 1) > 1 ? ' with ' + s.workers + ' workers' : '') + ' (' + U.round(Scheduler.stepLaborHours(s, units), 2) + ' labor h)' + (U.num(s.cureHours) ? ' + <b style="color:var(--cure)">' + U.hoursToText(U.num(s.cureHours)) + ' cure</b>' : '') + (units !== 1 ? ' · ' + units + ' units per product' : '');
+      let lotTxt = '';
+      if (res) lotTxt = ' · on <b>' + UI.esc(res.name) + '</b>: ' + res.capacity + ' × ' + (lt.lotSize || 'whole batch') + ' pcs at a time (' + (res.calendar === 'shop' ? 'shop hours' : '24/7') + ')';
+      else if (lt.lotSize) lotTxt = ' · lots of ' + lt.lotSize + ' pcs';
+      const per10 = (() => { if (!res || !lt.lotSize) return ''; const lots = Math.ceil(10 / lt.lotSize), waves = Math.ceil(lots / res.capacity); return ' · 10 pcs = ' + lots + ' lot' + (lots > 1 ? 's' : '') + ' in ' + waves + ' wave' + (waves > 1 ? 's' : ''); })();
+      card.querySelector('.summary').innerHTML = 'Per product: <b>' + U.minutesToText(wm) + '</b> attended work' + (U.num(s.workers, 1) > 1 ? ' with ' + s.workers + ' workers' : '') + ' (' + U.round(Scheduler.stepLaborHours(s, units, res), 2) + ' labor h)' + (U.num(s.processHours) ? ' + <b style="color:var(--cure)">' + U.hoursToText(U.num(s.processHours)) + ' process per lot</b>' : '') + (units !== 1 ? ' · ' + units + ' units per product' : '') + lotTxt + per10;
       card.querySelector('.deps').innerHTML = (preds.length ? 'After: <b>' + preds.map(p => UI.esc(p.nr + ' ' + p.name)).join(', ') + '</b>' : '<span class="badge">start step</span>') + (succs.length ? ' &nbsp;→ Before: <b>' + succs.map(p => UI.esc(p.nr + ' ' + p.name)).join(', ') + '</b>' : (s.outputPartId === r.finalPartId ? ' &nbsp;<span class="badge ok">final step</span>' : ''));
     });
 
@@ -268,11 +292,11 @@
     if (r.finalPartId && !g.cycle) {
       const cal = Store.calendar();
       const due = cal.shiftEndOn(new Date(2030, 0, 4)); // any Friday far away
-      const res = Scheduler.schedule({ recipe: r, partsById: pb, qty: 1, due, planStart: new Date(2020, 0, 6, 7, 0), calendar: cal });
+      const res = Scheduler.schedule({ recipe: r, partsById: pb, resourcesById: rb, qty: 1, due, planStart: new Date(2020, 0, 6, 7, 0), calendar: cal });
       html += '<div class="kpis" style="grid-template-columns:1fr 1fr">' +
         '<div class="kpi"><div class="k">Lead time, 1 pc</div><div class="v">' + U.hoursToText(res.totals.leadCalendarHoursJIT) + '</div><div class="s">calendar, JIT from due date</div></div>' +
         '<div class="kpi"><div class="k">Labor, 1 pc</div><div class="v">' + U.round(res.totals.laborHours, 1) + ' h</div><div class="s">' + U.round(res.totals.cureHours, 1) + ' h cure/wait total</div></div></div>';
-      html += '<h3 class="mt">Critical path (1 pc)</h3><ol style="margin:4px 0 0 18px;padding:0;font-size:13px">' + res.list.filter(x => x.critical).map(x => '<li>' + UI.esc(x.step.nr + ' ' + x.step.name) + ' <span class="muted">' + U.minutesToText(x.workMinutes) + (x.cureHours ? ' + ' + U.hoursToText(x.cureHours) + ' cure' : '') + '</span></li>').join('') + '</ol>';
+      html += '<h3 class="mt">Critical path (1 pc)</h3><ol style="margin:4px 0 0 18px;padding:0;font-size:13px">' + res.list.filter(x => x.critical).map(x => '<li>' + UI.esc(x.step.nr + ' ' + x.step.name) + ' <span class="muted">' + U.minutesToText(x.workMinutes) + (x.processHours ? ' + ' + U.hoursToText(x.processHours) + ' process' : '') + '</span></li>').join('') + '</ol>';
     }
     html += '<h3 class="mt">Product structure</h3>' + RecipesUI.structureHtml(r, g, pb);
     side.innerHTML = html;

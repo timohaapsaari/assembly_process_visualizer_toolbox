@@ -30,9 +30,26 @@
         { key: 'workMinutes', label: 'Work time per unit (min)', aliases: ['workminutes', 'workmin', 'worktime', 'worktimeperunit', 'runtime', 'runtimemin', 'runtimeperunit', 'perunit', 'perunitmin', 'minutesperunit', 'laborminutes', 'labourminutes', 'cycletime', 'työaika', 'tyoaika', 'yksikköaika'] },
         { key: 'workers', label: 'Workers', aliases: ['workers', 'worker', 'workercount', 'crew', 'crewsize', 'operators', 'persons', 'people', 'headcount', 'resources', 'työntekijät', 'tyontekijat', 'henkilöt', 'miehitys'] },
         { key: 'fixedMinutes', label: 'Fixed time per run (min)', aliases: ['fixedminutes', 'fixed', 'fixedtime', 'setup', 'setupminutes', 'setuptime', 'setupmin', 'batchtime', 'perrun', 'asetusaika', 'kiinteäaika'] },
-        { key: 'cureHours', label: 'Cure / wait time (h)', aliases: ['curehours', 'cure', 'curetime', 'curing', 'wait', 'waittime', 'waithours', 'drying', 'dryingtime', 'kovettuminen', 'kovetusaika', 'odotusaika', 'kuivumisaika'] },
+        { key: 'processHours', label: 'Process / cure time per lot (h)', aliases: ['processhours', 'process', 'processtime', 'curehours', 'cure', 'curetime', 'curing', 'wait', 'waittime', 'waithours', 'drying', 'dryingtime', 'machinetime', 'machinehours', 'testtime', 'kovettuminen', 'kovetusaika', 'odotusaika', 'kuivumisaika', 'prosessiaika', 'koneaika'] },
+        { key: 'resource', label: 'Process resource (equipment)', aliases: ['resource', 'equipment', 'machine', 'workcenter', 'workcentre', 'station', 'cabinet', 'chamber', 'oven', 'fixture', 'resurssi', 'laite', 'kone', 'työpiste', 'tyopiste'] },
+        { key: 'lotSize', label: 'Lot size (pcs per run)', aliases: ['lotsize', 'lot', 'batchsize', 'batch', 'lotqty', 'eräkoko', 'erakoko', 'erä'] },
+        { key: 'workerPool', label: 'Worker pool', aliases: ['workerpool', 'pool', 'team', 'laborpool', 'labourpool', 'crewname', 'tiimi', 'ryhmä'] },
+        { key: 'transferPerLot', label: 'Successor may start per lot (yes/no)', aliases: ['transferperlot', 'transfer', 'transferbatch', 'overlap', 'perlot', 'siirtoerä', 'limitys'] },
         { key: 'predecessors', label: 'Extra predecessors (step nrs)', aliases: ['predecessors', 'predecessor', 'preds', 'after', 'dependson', 'depends', 'previous', 'prev', 'edeltäjät', 'edeltavat', 'edeltäjä'] },
         { key: 'notes', label: 'Notes', aliases: ['notes', 'note', 'comment', 'comments', 'remarks', 'instructions', 'huomautus', 'huom', 'ohje'] }
+      ]
+    },
+    resources: {
+      label: 'Resources (equipment & worker pools)',
+      key: 'name',
+      fields: [
+        { key: 'name', label: 'Resource name', required: true, aliases: ['name', 'resource', 'resourcename', 'equipment', 'machine', 'workcenter', 'workcentre', 'station', 'nimi', 'resurssi', 'laite', 'kone'] },
+        { key: 'type', label: 'Type (equipment/labor)', aliases: ['type', 'resourcetype', 'kind', 'category', 'tyyppi'] },
+        { key: 'capacity', label: 'Capacity (units / persons)', aliases: ['capacity', 'units', 'count', 'quantity', 'qty', 'number', 'persons', 'headcount', 'kapasiteetti', 'lukumäärä', 'lkm', 'henkilöt'] },
+        { key: 'lotSize', label: 'Lot size (pcs per unit per run)', aliases: ['lotsize', 'lot', 'batchsize', 'batch', 'eräkoko', 'erakoko'] },
+        { key: 'processHours', label: 'Default process time per lot (h)', aliases: ['processhours', 'process', 'processtime', 'runhours', 'runtime', 'cycletime', 'curehours', 'hours', 'prosessiaika', 'kovetusaika'] },
+        { key: 'calendar', label: 'Calendar (24/7 or shop)', aliases: ['calendar', 'schedule', 'availability', 'shift', 'kalenteri'] },
+        { key: 'notes', label: 'Notes', aliases: ['notes', 'note', 'comment', 'comments', 'remarks', 'huomautus', 'huom'] }
       ]
     },
     bom: {
@@ -70,6 +87,7 @@
     let best = preferred && DATASETS[preferred] ? preferred : Object.keys(score).sort((a, b) => score[b] - score[a])[0];
     // special: a 'bom' file has componentItemNr + qty but no 'name'; a steps file needs name
     if (!preferred) {
+      if (maps.resources.name && maps.resources.capacity && !maps.steps.stepNr && !maps.parts.itemNr) best = 'resources';
       if (maps.bom.componentItemNr && maps.bom.qty && !maps.steps.name) best = 'bom';
       if (maps.steps.name && maps.steps.stepNr && !maps.bom.componentItemNr) best = 'steps';
       if (maps.parts.itemNr && !maps.steps.stepNr && !maps.bom.stepNr) best = 'parts';
@@ -154,6 +172,32 @@
       return report;
     }
 
+    if (opts.dataset === 'resources') {
+      rows.forEach((r, i) => {
+        const name = String(getVal(r, M, 'name') || '').trim();
+        if (!name) { report.errors.push('Row ' + (i + 2) + ': missing resource name'); return; }
+        let res = Store.resourceByName(name);
+        const o = {};
+        if (M.type) o.type = /^(l|labor|labour|worker|people|person|crew|team|henkil|työ|tyo)/i.test(String(getVal(r, M, 'type') || '')) ? 'labor' : 'equipment';
+        if (M.capacity) o.capacity = Math.max(1, Math.round(U.num(getVal(r, M, 'capacity'), 1)));
+        if (M.lotSize) o.lotSize = Math.max(0, U.num(getVal(r, M, 'lotSize'), 1));
+        if (M.processHours) o.processHours = Math.max(0, U.num(getVal(r, M, 'processHours'), 0));
+        if (M.calendar) o.calendar = /shop|shift|work|vuoro|työ/i.test(String(getVal(r, M, 'calendar') || '')) ? 'shop' : '24_7';
+        if (M.notes) o.notes = getVal(r, M, 'notes') || '';
+        if (res) { Object.assign(res, o); report.updated++; }
+        else { Store.addResource(Object.assign({ name }, o)); report.added++; }
+      });
+      return report;
+    }
+
+    const ensureResource = (name, type) => {
+      name = String(name || '').trim();
+      if (!name) return null;
+      let res = Store.resourceByName(name);
+      if (!res) { res = Store.addResource({ name, type: type || 'equipment', capacity: 1, lotSize: type === 'labor' ? 0 : 1 }); report.createdResources = (report.createdResources || []).concat(name); }
+      return res;
+    };
+
     // recipe resolution for steps / bom
     const recipeCache = {};
     const resolveRecipe = (r) => {
@@ -188,7 +232,11 @@
         if (M.workMinutes) o.workMinutes = U.num(getVal(r, M, 'workMinutes'), 0);
         if (M.workers) o.workers = Math.max(1, U.num(getVal(r, M, 'workers'), 1));
         if (M.fixedMinutes) o.fixedMinutes = U.num(getVal(r, M, 'fixedMinutes'), 0);
-        if (M.cureHours) o.cureHours = U.num(getVal(r, M, 'cureHours'), 0);
+        if (M.processHours) o.processHours = U.num(getVal(r, M, 'processHours'), 0);
+        if (M.resource) { const res = ensureResource(getVal(r, M, 'resource'), 'equipment'); o.resourceId = res ? res.id : null; }
+        if (M.lotSize) o.lotSize = Math.max(0, U.num(getVal(r, M, 'lotSize'), 0));
+        if (M.workerPool) { const res = ensureResource(getVal(r, M, 'workerPool'), 'labor'); o.workerPoolId = res ? res.id : null; }
+        if (M.transferPerLot) o.transferPerLot = /^(1|y|yes|true|x|k|kyllä|kylla)$/i.test(String(getVal(r, M, 'transferPerLot') || '').trim());
         if (M.notes) o.notes = getVal(r, M, 'notes') || '';
         if (M.components) {
           o.components = CSV.parseComponents(getVal(r, M, 'components')).map(c => { const p = ensurePart(c.itemNr); return p ? { partId: p.id, qty: c.qty } : null; }).filter(Boolean);
@@ -248,17 +296,24 @@
     ], delim);
   };
   CSV.exportSteps = function (recipes, delim) {
-    const pb = Store.partsById();
+    const pb = Store.partsById(), rb = Store.resourcesById();
     const rows = [];
     recipes.forEach(rc => rc.steps.forEach(s => rows.push({
       recipe: rc.name, step_nr: s.nr, step_name: s.name, step_type: s.type,
       output_item_nr: pb[s.outputPartId] ? pb[s.outputPartId].itemNr : '',
       components: (s.components || []).map(c => (pb[c.partId] ? pb[c.partId].itemNr : '?') + ':' + c.qty).join('|'),
-      work_minutes: s.workMinutes, workers: s.workers, fixed_minutes: s.fixedMinutes, cure_hours: s.cureHours,
+      work_minutes: s.workMinutes, workers: s.workers, worker_pool: rb[s.workerPoolId] ? rb[s.workerPoolId].name : '', fixed_minutes: s.fixedMinutes,
+      process_hours: s.processHours, resource: rb[s.resourceId] ? rb[s.resourceId].name : '', lot_size: s.lotSize || '', transfer_per_lot: s.transferPerLot ? 'yes' : 'no',
       predecessors: (s.extraPreds || []).map(id => { const t = rc.steps.find(x => x.id === id); return t ? t.nr : ''; }).filter(Boolean).join(';'),
       notes: s.notes || ''
     })));
-    return U.toCSV(rows, ['recipe', 'step_nr', 'step_name', 'step_type', 'output_item_nr', 'components', 'work_minutes', 'workers', 'fixed_minutes', 'cure_hours', 'predecessors', 'notes'].map(k => ({ key: k })), delim);
+    return U.toCSV(rows, ['recipe', 'step_nr', 'step_name', 'step_type', 'output_item_nr', 'components', 'work_minutes', 'workers', 'worker_pool', 'fixed_minutes', 'process_hours', 'resource', 'lot_size', 'transfer_per_lot', 'predecessors', 'notes'].map(k => ({ key: k })), delim);
+  };
+  CSV.exportResources = function (delim) {
+    return U.toCSV(Store.state.resources || [], [
+      { key: 'name' }, { key: 'type' }, { key: 'capacity' }, { key: 'lotSize', label: 'lot_size' }, { key: 'processHours', label: 'process_hours' },
+      { key: 'calendar', get: r => r.calendar === 'shop' ? 'shop' : '24/7' }, { key: 'notes' }
+    ], delim);
   };
   CSV.exportBOM = function (recipes, delim) {
     const pb = Store.partsById();

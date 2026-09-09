@@ -20,18 +20,20 @@
   S.typeInfo = id => S.STEP_TYPES.find(t => t.id === id) || S.STEP_TYPES[S.STEP_TYPES.length - 1];
 
   /** Duration of the work portion of a step in working minutes for the given number of units. */
-  S.stepWorkMinutes = function (step, units) {
+  S.stepWorkMinutes = function (step, units, resource) {
     const workers = Math.max(1, U.num(step.workers, 1));
     const fixed = Math.max(0, U.num(step.fixedMinutes, 0));
     const perUnit = Math.max(0, U.num(step.workMinutes, 0));
-    return fixed + (perUnit * units) / workers;
+    const n = S.lots(units, S.lotting(step, resource).lotSize).length;
+    return fixed * n + (perUnit * units) / workers;
   };
   /** Labor hours (man-hours) for a step. */
-  S.stepLaborHours = function (step, units) {
+  S.stepLaborHours = function (step, units, resource) {
     const workers = Math.max(1, U.num(step.workers, 1));
     const fixed = Math.max(0, U.num(step.fixedMinutes, 0));
     const perUnit = Math.max(0, U.num(step.workMinutes, 0));
-    return (fixed * workers + perUnit * units) / 60;
+    const n = S.lots(units, S.lotting(step, resource).lotSize).length;
+    return (fixed * workers * n + perUnit * units) / 60;
   };
 
   /**
@@ -110,7 +112,7 @@
    * Quantity explosion: how many units each step must produce for `qty` of the recipe's final part,
    * and the demand for purchased (non-produced) parts.
    */
-  S.explode = function (recipe, partsById, qty, graph) {
+  S.explode = function (recipe, partsById, qty, graph, extraDemand) {
     graph = graph || S.buildGraph(recipe, partsById);
     const demand = {};  // partId -> units
     const units = {};   // stepId -> units
@@ -118,6 +120,7 @@
     const finalId = recipe.finalPartId;
     if (finalId) demand[finalId] = qty;
     else warnings.push({ level: 'error', text: 'Recipe has no final product part selected.' });
+    (extraDemand || []).forEach(e => { if (e.partId && U.num(e.qty) > 0) demand[e.partId] = (demand[e.partId] || 0) + U.num(e.qty); });
 
     const producedParts = new Set(Object.keys(graph.producers));
     const rev = graph.order.slice().reverse(); // consumers first
@@ -160,64 +163,148 @@
     return segs;
   };
 
+  /** Effective lot size and capacity of a step: {lotSize (0 = whole batch), capacity (Infinity = unlimited)}. */
+  S.lotting = function (step, resource) {
+    let lotSize = Math.max(0, U.num(step.lotSize, 0));
+    if (!lotSize && resource) lotSize = Math.max(0, U.num(resource.lotSize, 0));
+    const capacity = resource ? Math.max(1, Math.round(U.num(resource.capacity, 1))) : Infinity;
+    return { lotSize, capacity };
+  };
+
+  /** Split units into lots: [{units, cum}]. */
+  S.lots = function (units, lotSize) {
+    if (!lotSize || lotSize >= units) return [{ units, cum: units }];
+    const out = []; let cum = 0;
+    while (cum < units - 1e-9) { const u = Math.min(lotSize, units - cum); cum += u; out.push({ units: u, cum }); }
+    return out;
+  };
+
   /**
-   * Main entry. opts: { recipe, partsById, qty, due (Date), planStart (Date), calendar (Calendar) }
+   * Main entry. opts: { recipe, partsById, resourcesById, qty, due (Date), planStart (Date), calendar (Calendar) }
+   * Every step is scheduled lot by lot: attended work (fixed per lot + per-unit / workers, shop hours) followed by an
+   * unattended process (curing, testing) on a process resource with capacity × lot size, in the resource calendar.
    */
   S.schedule = function (opts) {
-    const recipe = opts.recipe, partsById = opts.partsById || {};
+    const recipe = opts.recipe, partsById = opts.partsById || {}, resById = opts.resourcesById || {};
     const qty = Math.max(1, U.num(opts.qty, 1));
     const cal = opts.calendar instanceof Calendar ? opts.calendar : new Calendar(opts.calendar);
     const due = opts.due instanceof Date ? new Date(opts.due) : U.parseLocal(opts.due);
     const planStart = opts.planStart instanceof Date ? new Date(opts.planStart) : (U.parseLocal(opts.planStart) || new Date());
 
+    // milestones: separate due dates (and optional extra quantity) for sub-assemblies
+    const milestones = (opts.milestones || []).map(m => ({ partId: m.partId, due: m.due instanceof Date ? m.due : U.parseLocal(m.due), qty: Math.max(0, U.num(m.qty, 0)), label: m.label || '' })).filter(m => m.partId && m.due);
     const graph = S.buildGraph(recipe, partsById);
-    const ex = S.explode(recipe, partsById, qty, graph);
+    const ex = S.explode(recipe, partsById, qty, graph, milestones.filter(m => m.qty > 0).map(m => ({ partId: m.partId, qty: m.qty })));
     const warnings = graph.warnings.concat(ex.warnings);
+    milestones.forEach(m => { if (!(graph.producers[m.partId] || []).length) warnings.push({ level: 'warn', text: 'Sub-assembly due date: no step produces ' + ((partsById[m.partId] || {}).itemNr || m.partId) + '.' }); });
+    const milestoneDue = pid => milestones.filter(m => m.partId === pid).reduce((d, m) => (!d || m.due < d ? m.due : d), null);
 
     const rows = {};
     (recipe.steps || []).forEach(s => {
       const units = ex.units[s.id];
-      rows[s.id] = {
-        step: s, units,
-        workMinutes: S.stepWorkMinutes(s, units),
-        laborHours: S.stepLaborHours(s, units),
-        cureHours: Math.max(0, U.num(s.cureHours, 0)),
-        workers: Math.max(1, U.num(s.workers, 1)),
-        preds: Array.from(graph.preds[s.id]),
-        succs: Array.from(graph.succs[s.id])
+      const resource = s.resourceId ? (resById[s.resourceId] || null) : null;
+      if (s.resourceId && !resource) warnings.push({ level: 'warn', text: 'Step ' + s.nr + ' refers to an unknown resource; scheduled without capacity limit.' });
+      const pool = s.workerPoolId ? (resById[s.workerPoolId] || null) : null;
+      const lt = S.lotting(s, resource);
+      const lots = S.lots(units, lt.lotSize);
+      const workers = Math.max(1, U.num(s.workers, 1));
+      const fixed = Math.max(0, U.num(s.fixedMinutes, 0)), perUnit = Math.max(0, U.num(s.workMinutes, 0));
+      const processHours = Math.max(0, U.num(s.processHours != null ? s.processHours : s.cureHours, 0));
+      const procCal = resource ? (resource.calendar === 'shop' ? 'shop' : '24_7') : (cal.s.cureUsesCalendar ? '24_7' : 'shop');
+      const r = rows[s.id] = {
+        step: s, units, workers, pool, resource, lotSize: lt.lotSize, capacity: lt.capacity, processHours, procCal,
+        transfer: !!s.transferPerLot,
+        lotsE: lots.map(l => ({ units: l.units, cum: l.cum })),
+        lotsL: lots.map(l => ({ units: l.units, cum: l.cum })),
+        preds: Array.from(graph.preds[s.id]), succs: Array.from(graph.succs[s.id])
       };
+      r.attMinutes = lot => fixed + (perUnit * lot.units) / workers;
+      r.workMinutes = lots.reduce((a, l) => a + r.attMinutes(l), 0);
+      r.laborHours = (fixed * workers * lots.length + perUnit * units) / 60;
+      r.nLots = lots.length;
+      r.waves = isFinite(lt.capacity) ? Math.ceil(lots.length / lt.capacity) : 1;
+      r.addProc = (t, h) => !h ? new Date(t) : (procCal === 'shop' ? cal.addWorking(t, h * 60) : new Date(t.getTime() + h * 3600000));
+      r.subProc = (t, h) => !h ? new Date(t) : (procCal === 'shop' ? cal.subtractWorking(t, h * 60) : new Date(t.getTime() - h * 3600000));
     });
 
-    // ---- Backward pass (JIT / latest) ----
-    const rev = graph.order.slice().reverse();
-    rev.forEach(sid => {
+    // quantity of predecessor output needed per unit of successor output (undefined = no part relation)
+    const qtyPerUnit = (pred, succ) => {
+      if (!pred.step.outputPartId) return undefined;
+      const c = (succ.step.components || []).find(c => c.partId === pred.step.outputPartId);
+      return c ? Math.max(0, U.num(c.qty, 1)) : undefined;
+    };
+
+    // ---- Backward pass (JIT / latest): reverse topological order, lot by lot ----
+    graph.order.slice().reverse().forEach(sid => {
       const r = rows[sid];
-      let lf = due;
-      if (r.succs.length) {
-        r.succs.forEach(nid => { const n = rows[nid]; if (n.LS && n.LS < lf) lf = n.LS; });
+      const n = r.nLots;
+      // latest finish of each lot from successors (and from a sub-assembly due date on the output part)
+      const own = r.step.outputPartId ? milestoneDue(r.step.outputPartId) : null;
+      const lotDue = own && own < due ? own : due;
+      const lotLF = r.lotsL.map(() => new Date(lotDue));
+      r.succs.forEach(tid => {
+        const t = rows[tid];
+        if (!t.lotsL[0].attStart) return;
+        const q = qtyPerUnit(r, t);
+        if (!r.transfer || q === undefined || q <= 0) {
+          r.lotsL.forEach((l, j) => { if (t.lotsL[0].attStart < lotLF[j]) lotLF[j] = t.lotsL[0].attStart; });
+          return;
+        }
+        r.lotsL.forEach((l, j) => {
+          const prevCum = j ? r.lotsL[j - 1].cum : 0;
+          const k = t.lotsL.findIndex(tl => tl.cum * q > prevCum + 1e-9);
+          if (k >= 0 && t.lotsL[k].attStart < lotLF[j]) lotLF[j] = t.lotsL[k].attStart;
+        });
+      });
+      for (let j = n - 1; j >= 0; j--) {
+        const L = r.lotsL[j];
+        let procEnd = lotLF[j];
+        if (isFinite(r.capacity) && j + r.capacity < n && r.lotsL[j + r.capacity].attStart < procEnd) procEnd = r.lotsL[j + r.capacity].attStart;
+        let attEnd = cal.snapBackward(r.subProc(procEnd, r.processHours));
+        if (j + 1 < n && r.lotsL[j + 1].attStart < attEnd) attEnd = cal.snapBackward(r.lotsL[j + 1].attStart);
+        L.attEnd = attEnd;
+        L.attStart = cal.subtractWorking(attEnd, r.attMinutes(L));
+        L.procEnd = r.addProc(attEnd, r.processHours);
       }
-      r.LF = new Date(lf);                                  // end of cure
-      r.LcureStart = cal.subtractCure(r.LF, r.cureHours);   // work must finish by here
-      r.LworkEnd = cal.snapBackward(r.LcureStart);
-      r.LS = cal.subtractWorking(r.LworkEnd, r.workMinutes);
-      if (r.cureHours) r.LF = cal.addCure(r.LworkEnd, r.cureHours); // actual cure end (<= lf)
-      else r.LF = r.LworkEnd;
+      r.LS = r.lotsL[0].attStart; r.LworkEnd = r.lotsL[n - 1].attEnd;
+      r.LF = r.lotsL.reduce((m, l) => l.procEnd > m ? l.procEnd : m, r.lotsL[0].procEnd);
     });
 
-    // ---- Forward pass (ASAP / earliest) ----
+    // ---- Forward pass (ASAP / earliest): topological order, lot by lot ----
     graph.order.forEach(sid => {
       const r = rows[sid];
-      let es = planStart;
-      r.preds.forEach(pid => { const p = rows[pid]; if (p.EF && p.EF > es) es = p.EF; });
-      r.ES = cal.snapForward(es);
-      r.EworkEnd = cal.addWorking(r.ES, r.workMinutes);
-      r.EF = cal.addCure(r.EworkEnd, r.cureHours);
+      const n = r.nLots;
+      const readyFromPred = (p, j) => {
+        const q = qtyPerUnit(p, r);
+        if (!p.transfer || q === undefined || q <= 0) return p.EF;
+        const need = r.lotsE[j].cum * q;
+        const i = p.lotsE.findIndex(pl => pl.cum >= need - 1e-9);
+        return i >= 0 ? p.lotsE[i].procEnd : p.EF;
+      };
+      let crewFree = planStart; const slotFree = [];
+      r.driverPreds = [];
+      for (let j = 0; j < n; j++) {
+        const L = r.lotsE[j];
+        let ready = planStart, driver = null, contribs = [];
+        r.preds.forEach(pid => { const t = readyFromPred(rows[pid], j); contribs.push({ pid, t }); if (t > ready) { ready = t; driver = pid; } });
+        if (j === 0) r.driverPreds = contribs.filter(c => Math.abs(c.t - ready) <= 60000 && c.t > planStart).map(c => c.pid);
+        let start = ready > crewFree ? ready : crewFree;
+        if (isFinite(r.capacity)) { const sf = slotFree[j % r.capacity]; if (sf && sf > start) start = sf; }
+        L.attStart = cal.snapForward(start);
+        L.attEnd = cal.addWorking(L.attStart, r.attMinutes(L));
+        L.procEnd = r.addProc(L.attEnd, r.processHours);
+        L.waitedFor = driver && ready > crewFree ? driver : null;
+        crewFree = L.attEnd;
+        if (isFinite(r.capacity)) slotFree[j % r.capacity] = L.procEnd;
+      }
+      r.ES = r.lotsE[0].attStart; r.EworkEnd = r.lotsE[n - 1].attEnd;
+      r.EF = r.lotsE.reduce((m, l) => l.procEnd > m ? l.procEnd : m, r.lotsE[0].procEnd);
     });
     // steps in a cycle: fallback
     (recipe.steps || []).forEach(s => {
       const r = rows[s.id];
-      if (!r.LS) { r.LS = r.LworkEnd = r.LF = new Date(due); }
-      if (!r.ES) { r.ES = r.EworkEnd = r.EF = new Date(planStart); }
+      if (!r.LS) { r.LS = r.LworkEnd = r.LF = new Date(due); r.lotsL.forEach(l => { l.attStart = l.attEnd = l.procEnd = new Date(due); }); }
+      if (!r.ES) { r.ES = r.EworkEnd = r.EF = new Date(planStart); r.lotsE.forEach(l => { l.attStart = l.attEnd = l.procEnd = new Date(planStart); }); r.driverPreds = []; }
     });
 
     // ---- Float & critical path ----
@@ -227,22 +314,24 @@
       if (r.EF > projectedFinish) projectedFinish = r.EF;
       if (r.LS < requiredStart) requiredStart = r.LS;
     });
-    // Critical path = the chain of driving predecessors (those that determine each start) traced back
-    // from the step(s) that finish last. This stays correct with calendar-time cures, where float is
-    // not uniform along a chain.
-    Object.values(rows).forEach(r => { r.critical = false; r.driverPreds = []; });
-    Object.values(rows).forEach(r => {
-      let maxEF = null;
-      r.preds.forEach(pid => { const p = rows[pid]; if (!maxEF || p.EF > maxEF) maxEF = p.EF; });
-      if (maxEF) r.driverPreds = r.preds.filter(pid => Math.abs(rows[pid].EF - maxEF) <= 60000);
-    });
+    // Critical path = chain of driving predecessors (those that actually gate each start) traced back from the
+    // step(s) that finish last. Correct with calendar-time processes, where float is not uniform along a chain.
+    Object.values(rows).forEach(r => { r.critical = false; });
     const stack = Object.values(rows).filter(r => Math.abs(r.EF - projectedFinish) <= 60000).map(r => r.step.id);
     while (stack.length) {
       const id = stack.pop(); const r = rows[id];
       if (r.critical) continue;
       r.critical = true;
-      r.driverPreds.forEach(pid => stack.push(pid));
+      (r.driverPreds || []).forEach(pid => stack.push(pid));
     }
+
+    const milestoneStatus = milestones.map(m => {
+      const prods = (graph.producers[m.partId] || []).map(id => rows[id]);
+      const EF = prods.reduce((x, r) => (!x || r.EF > x ? r.EF : x), null);
+      const LF = prods.reduce((x, r) => (!x || r.LF > x ? r.LF : x), null);
+      const LS = prods.reduce((x, r) => (!x || r.LS < x ? r.LS : x), null);
+      return { partId: m.partId, part: partsById[m.partId], due: m.due, qty: m.qty, label: m.label, EF, LF, LS, late: EF ? EF > m.due : false, lateMinutes: EF && EF > m.due ? cal.workingMinutesBetween(m.due, EF) : 0 };
+    });
 
     const late = projectedFinish > due;
     const lateMinutes = late ? cal.workingMinutesBetween(due, projectedFinish) : 0;
@@ -271,16 +360,72 @@
     const totals = {
       laborHours: list.reduce((a, r) => a + r.laborHours, 0),
       workMinutes: list.reduce((a, r) => a + r.workMinutes, 0),
-      cureHours: list.reduce((a, r) => a + r.cureHours, 0),
+      cureHours: list.reduce((a, r) => a + r.processHours * r.nLots, 0),
       leadWorkingHoursJIT: cal.workingMinutesBetween(requiredStart, due) / 60,
       leadCalendarHoursJIT: (due - requiredStart) / 3600000,
       leadCalendarHoursASAP: (projectedFinish - planStart) / 3600000
     };
 
     return {
-      recipe, qty, due, planStart, calendar: cal, graph, rows, list, purchases, warnings, totals,
+      recipe, qty, due, planStart, calendar: cal, graph, rows, list, purchases, warnings, totals, milestones: milestoneStatus,
       projectedFinish, requiredStart, late, lateMinutes, startsInPast, shortMinutes, units: ex.units
     };
+  };
+
+  /** Lots of a row for the given mode. */
+  S.lotsOf = (r, mode) => mode === 'asap' ? r.lotsE : r.lotsL;
+
+  /**
+   * Resource occupancy for the chosen mode. Returns [{resource, intervals:[{row, lot, j, a, b, w}], conflicts:[{a,b,load}],
+   * days:[{date, hours, util}]}] for every resource used (equipment: lot occupies 1 unit from attended start to process
+   * end; labor pools: attended interval with weight = workers). generalPool = {capacity} for steps without a pool.
+   */
+  S.resourceLoad = function (result, mode, generalCapacity) {
+    const map = {};
+    const add = (res, row, lot, j, a, b, w) => {
+      const key = res.id;
+      const e = map[key] || (map[key] = { resource: res, intervals: [], conflicts: [], days: [] });
+      if (b > a) e.intervals.push({ row, lot, j, a, b, w });
+    };
+    const general = { id: '__general', name: 'General workers', type: 'labor', capacity: generalCapacity || 0, general: true };
+    result.list.forEach(r => {
+      S.lotsOf(r, mode).forEach((l, j) => {
+        if (r.resource) add(r.resource, r, l, j, l.attStart, l.procEnd, 1);
+        add(r.pool || general, r, l, j, l.attStart, l.attEnd, r.workers);
+      });
+    });
+    const cal = result.calendar;
+    Object.values(map).forEach(e => {
+      const cap = Math.max(0, U.num(e.resource.capacity, 0));
+      // sweep for overload
+      const ev = [];
+      e.intervals.forEach(iv => { ev.push({ t: iv.a.getTime(), w: iv.w }, { t: iv.b.getTime(), w: -iv.w }); });
+      ev.sort((x, y) => x.t - y.t || x.w - y.w);
+      let load = 0, over = null;
+      ev.forEach(x => {
+        load += x.w;
+        if (cap > 0 && load > cap && !over) over = { a: new Date(x.t), load };
+        else if (over && load > cap && load > over.load) over.load = load;
+        else if (over && load <= cap) { over.b = new Date(x.t); e.conflicts.push(over); over = null; }
+      });
+      if (over) { over.b = new Date(ev[ev.length - 1].t); e.conflicts.push(over); }
+      e.peak = ev.reduce((acc, x) => { acc.cur += x.w; return { cur: acc.cur, max: Math.max(acc.max, acc.cur) }; }, { cur: 0, max: 0 }).max;
+      // per-day occupied hours (unit-hours)
+      const days = {};
+      e.intervals.forEach(iv => {
+        let cur = new Date(iv.a.getFullYear(), iv.a.getMonth(), iv.a.getDate());
+        for (let g = 0; g < 400 && cur < iv.b; g++) {
+          const next = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() + 1);
+          const a = iv.a > cur ? iv.a : cur, b = iv.b < next ? iv.b : next;
+          if (b > a) { const k = U.isoDate(cur); days[k] = (days[k] || 0) + ((b - a) / 3600000) * iv.w; }
+          cur = next;
+        }
+      });
+      const availPerDay = e.resource.type === 'labor' || e.resource.calendar === 'shop' ? (cal.minutesPerDay() / 60) : 24;
+      e.days = Object.keys(days).sort().map(k => ({ date: k, hours: days[k], util: cap > 0 ? days[k] / (cap * availPerDay) : 0 }));
+      e.utilization = e.days.length && cap > 0 ? e.days.reduce((a, d) => a + d.hours, 0) / (cap * availPerDay * e.days.length) : 0;
+    });
+    return Object.values(map).sort((a, b) => (a.resource.type === b.resource.type ? 0 : a.resource.type === 'equipment' ? -1 : 1) || String(a.resource.name).localeCompare(String(b.resource.name)));
   };
 
   /** Per-day labor load for the chosen mode ('jit' | 'asap'): [{date, laborHours, avgWorkers, peakWorkers}]. */
@@ -290,14 +435,12 @@
     const days = {};
     const events = [];
     result.list.forEach(r => {
-      const a = mode === 'asap' ? r.ES : r.LS;
-      const b = mode === 'asap' ? r.EworkEnd : r.LworkEnd;
-      S.workSegments(cal, a, b).forEach(seg => {
+      S.lotsOf(r, mode).forEach(l => S.workSegments(cal, l.attStart, l.attEnd).forEach(seg => {
         const key = U.isoDate(seg.a);
         const d = days[key] || (days[key] = { date: key, laborHours: 0, avgWorkers: 0, peakWorkers: 0 });
         d.laborHours += ((seg.b - seg.a) / 60000) * r.workers / 60;
         events.push({ t: seg.a.getTime(), w: r.workers, key }, { t: seg.b.getTime(), w: -r.workers, key });
-      });
+      }));
     });
     events.sort((x, y) => x.t - y.t || x.w - y.w);
     let cur = 0;
@@ -315,7 +458,8 @@
         step_nr: s.nr, step_name: s.name, step_type: s.type,
         output_item_nr: out ? out.itemNr : '', output_name: out ? out.name : '',
         units: r.units, workers: r.workers,
-        work_minutes_total: U.round(r.workMinutes, 1), labor_hours: U.round(r.laborHours, 2), cure_hours: r.cureHours,
+        work_minutes_total: U.round(r.workMinutes, 1), labor_hours: U.round(r.laborHours, 2), process_hours_per_lot: r.processHours,
+        resource: r.resource ? r.resource.name : '', lot_size: r.lotSize || '', lots: r.nLots, worker_pool: r.pool ? r.pool.name : '',
         jit_start: U.isoDateTime(r.LS), jit_work_end: U.isoDateTime(r.LworkEnd), jit_finish: U.isoDateTime(r.LF),
         asap_start: U.isoDateTime(r.ES), asap_work_end: U.isoDateTime(r.EworkEnd), asap_finish: U.isoDateTime(r.EF),
         float_hours: U.round(r.floatMinutes / 60, 1), critical: r.critical ? 'yes' : 'no',

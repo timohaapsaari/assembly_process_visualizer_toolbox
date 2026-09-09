@@ -154,6 +154,7 @@
     const ev = input.tagName === 'SELECT' || input.type === 'checkbox' || input.type === 'date' || input.type === 'time' ? 'change' : 'input';
     input.addEventListener(ev, () => {
       let v = input.type === 'checkbox' ? input.checked : input.value;
+      if (type === 'bool') v = !!v;
       if (type === 'num') v = U.num(v, 0);
       if (type === 'int') v = Math.round(U.num(v, 0));
       obj[key] = v;

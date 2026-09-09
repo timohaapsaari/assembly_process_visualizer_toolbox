@@ -85,9 +85,23 @@ const SHOTS = process.env.SHOTS || require('os').tmpdir() + '/apv-shots/'; requi
   const cmp = await page.evaluate(() => {
     const st = Store.state; const pb = Store.partsById(); const cal = Store.calendar();
     const due = new Date(2026, 9, 2, 15, 30), start = new Date(2026, 8, 9, 7, 0);
-    return st.recipes.map(r => { const res = Scheduler.schedule({ recipe: r, partsById: pb, qty: 12, due, planStart: start, calendar: cal }); return r.name + ': steps=' + r.steps.length + ' final=' + (pb[r.finalPartId] || {}).itemNr + ' reqStart=' + U.isoDateTime(res.requiredStart) + ' labor=' + U.round(res.totals.laborHours, 1) + ' warnings=' + res.warnings.length + ' purchases=' + res.purchases.length; });
+    return st.recipes.map(r => { const res = Scheduler.schedule({ recipe: r, partsById: pb, resourcesById: Store.resourcesById(), qty: 12, due, planStart: start, calendar: cal }); return r.name + ': steps=' + r.steps.length + ' final=' + (pb[r.finalPartId] || {}).itemNr + ' reqStart=' + U.isoDateTime(res.requiredStart) + ' labor=' + U.round(res.totals.laborHours, 1) + ' warnings=' + res.warnings.length + ' purchases=' + res.purchases.length; });
   });
   console.log(cmp);
+
+  // resources tab
+  await page.click('#tabs button[data-tab="resources"]'); await page.waitForTimeout(300);
+  console.log('resources rows:', await page.$$eval('#res-body tr', r => r.length));
+  await page.screenshot({ path: SHOTS + 'resources.png', fullPage: true });
+  // plan: add a sub-assembly due date and check it renders
+  await page.click('#tabs button[data-tab="plan"]'); await page.waitForTimeout(400);
+  await page.click('#ms-add'); await page.waitForTimeout(400);
+  await page.$eval('.ms-date', (i) => { i.value = '2026-09-11'; i.dispatchEvent(new Event('change', { bubbles: true })); }); await page.waitForTimeout(400);
+  console.log('milestone tiles:', await page.$$eval('.kpi .k', els => els.filter(e => /Sub-assembly/.test(e.textContent)).map(e => e.parentElement.querySelector('.v').textContent)));
+  console.log('conflict alerts:', await page.$$eval('.alert.err', els => els.map(e => e.textContent.slice(0, 90))));
+  console.log('resource gantt lanes:', await page.$$eval('#rgantt g.riv', g => g.length));
+  await page.screenshot({ path: SHOTS + 'plan_resources.png', fullPage: true });
+  await page.$eval('.form-row button.btn-danger', b => b.click()); await page.waitForTimeout(300);
 
   // settings
   await page.click('#tabs button[data-tab="settings"]'); await page.waitForTimeout(300);

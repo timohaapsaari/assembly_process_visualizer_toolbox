@@ -19,8 +19,8 @@
       '<label class="f"><span>Break start</span><input type="time" id="s-brk" value="' + UI.esc(s.breakStart || '') + '"></label>' +
       '<label class="f"><span>Break length (min)</span><input type="number" id="s-brklen" min="0" value="' + U.num(s.breakMinutes) + '"></label>' +
       '</div>' +
-      '<div class="form-row"><label class="check"><input type="checkbox" id="s-cure" ' + (s.cureUsesCalendar ? 'checked' : '') + '> Curing / wait time runs 24/7 (calendar time)</label></div>' +
-      '<div class="form-row"><label class="f"><span>Max workers available (0 = no check)</span><input type="number" id="s-max" min="0" value="' + U.num(s.maxWorkers) + '"></label></div>' +
+      '<div class="form-row"><label class="check"><input type="checkbox" id="s-cure" ' + (s.cureUsesCalendar ? 'checked' : '') + '> Process / cure time of steps without a resource runs 24/7 (calendar time)</label></div>' +
+      '<div class="form-row"><label class="f"><span>General worker pool size (steps without a worker pool; 0 = no check)</span><input type="number" id="s-max" min="0" value="' + U.num(s.maxWorkers) + '"></label></div>' +
       '<div class="muted small" id="s-summary"></div>' +
       '</div>' +
       '<div class="panel"><div class="panel-head"><h2>Holidays / non-working days</h2></div>' +

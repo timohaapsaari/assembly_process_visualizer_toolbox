@@ -11,29 +11,38 @@ browser's localStorage and can be exported/imported as CSV or JSON.
 
 - **Parts admin** – item nr, name, purchased/manufactured, unit, default work time per unit,
   supplier lead time. Inline editing, filtering, CSV import/export.
+- **Resources** – equipment (bonding fixtures, curing ovens, test chambers, burn-in cabinets) with
+  capacity, lot size and own calendar (24/7 or shop hours), and worker pools with headcount.
+  Capacity × lot size limits how many pieces can be in a process at once.
 - **Recipe builder** – build the assembly process as steps. Each step *produces* an output part
   and *uses* component parts with quantities; when a step uses the output of another step the
   dependency is derived automatically (sub-assemblies flow into later steps). Per step:
-  - work time per unit (labor minutes) and number of workers (elapsed = per-unit × qty ÷ workers)
-  - fixed time per run (setup, test rig, batch time)
-  - cure / wait hours (adhesive curing, potting, burn-in) – calendar time, no workers
+  - work time per unit (labor minutes) and number of workers from a worker pool
+    (elapsed = per-unit × qty ÷ workers)
+  - fixed time per lot (setup, loading, test rig)
+  - process / cure time per lot (adhesive curing, potting, test cycle, burn-in) on a process
+    resource; the step runs lot by lot in waves limited by the resource capacity
+  - "next step per lot": the successor starts on the first finished lot (transfer batch)
   - extra "also after" predecessors, notes, step type (assembly, sub-assembly, bonding/curing,
     test, inspection, packaging)
   - live validation, per-unit lead time, critical path and product structure tree
-- **Planning** – choose recipe, quantity and delivery date. Quantities are exploded through all
-  steps, every step is scheduled **backwards** from the due date through the shop calendar
-  (latest start = just-in-time), and a forward pass from the earliest start gives float and the
-  **critical path**. If the latest start lies in the past the plan is flagged as not achievable
-  with the earliest possible finish.
-  - Gantt (work inside working hours, hatched cure time, non-working time shaded, float,
-    dependency arrows, start/due lines, hover details, zoom)
+- **Planning** – choose recipe, quantity and delivery date, plus optional **sub-assembly due
+  dates** (a sub-assembly shipped earlier or separately, with extra pieces). Quantities are
+  exploded through all steps, every step is scheduled **backwards** lot by lot from the due date
+  through the shop calendar (latest start = just-in-time), and a forward pass from the earliest
+  start gives float and the **critical path**. If the latest start lies in the past the plan is
+  flagged as not achievable with the earliest possible finish.
+  - Gantt (attended work inside working hours, hatched process time per lot, non-working time
+    shaded, float, dependency arrows, start/due/sub-assembly lines, hover details, zoom)
+  - **resource occupancy chart**: one lane per fixture / chamber / person, utilisation,
+    double bookings in red, bottleneck resource tile
   - precedence network diagram
-  - step schedule table, worker load per day with capacity warning
+  - step schedule table with lots and waves, worker load per day with capacity warning
   - materials to purchase with need dates and order-by dates from lead times
   - CSV export of the schedule and the material list, print/PDF
 - **Shop calendar** – working days, shift start/end, break, holidays (Finnish public holidays
   one click), whether curing runs 24/7, max available workers.
-- **CSV import** – ERP exports for parts, routing steps and BOM lines. Delimiter (`,` `;` tab)
+- **CSV import** – ERP exports for parts, resources, routing steps and BOM lines. Delimiter (`,` `;` tab)
   and decimal commas are auto-detected, headers are auto-mapped (English and Finnish aliases)
   with a manual mapping/preview step. JSON backup/restore of everything.
 
@@ -43,13 +52,22 @@ Follows the routing time-element model used by MRP/ERP systems (setup / run time
 crew size / wait time), backward scheduling from the demand due date with a working calendar,
 and critical-path analysis:
 
-- step elapsed work = fixed minutes + work minutes per unit × units ÷ workers, placed only inside
-  working hours
-- cure / wait time runs on calendar time (nights and weekends count), configurable
+- a step's units are split into lots (lot size from the step or its resource); per lot the attended
+  work = fixed minutes + work minutes per unit × lot units ÷ workers, placed inside working hours,
+  followed by the unattended process time on the resource calendar (24/7 or shop)
+- the crew works the lots one after another; a lot can only be loaded when one of the resource's
+  units (fixture, chamber) is free, so quantities above capacity × lot size run in waves
+- with "next step per lot" a successor lot starts as soon as the cumulative predecessor output
+  covers its needs; otherwise it waits for the predecessor's last lot
 - units per step come from exploding the required quantity through the component structure;
   a step whose output is also one of its inputs (e.g. a test on the same item) is a pass-through
-- backward pass: latest finish of a step = earliest latest-start of its successors (due date for
-  the final step); forward pass from the earliest start gives earliest dates and float
+- backward pass: latest finish of a lot = earliest start of the successor lot that needs it (or the
+  due date / sub-assembly due date); mirrored for crew and capacity; forward pass from the
+  earliest start gives earliest dates, float and the critical path (chain of driving predecessors)
+- resource occupancy is checked after scheduling: overlapping lots beyond the capacity of a
+  resource or worker pool are reported as conflicts (infinite-capacity scheduling with capacity
+  evaluation, as in standard ERP scheduling; finite-capacity sequencing across orders is a
+  planned second pass)
 - purchased part need date = start of the first consuming step; order-by = need date − lead time
 
 ## Files
@@ -62,8 +80,8 @@ js/calendar.js      working calendar math
 js/scheduler.js     graph, quantity explosion, backward/forward scheduling, load profile
 js/store.js         state, persistence, demo data
 js/csv-io.js        CSV dataset definitions, header auto-mapping, import/export
-js/ui-*.js          tabs: plan, recipes, parts, data, settings
-samples/*.csv       example ERP-style files (parts, steps, bom)
+js/ui-*.js          tabs: plan, recipes, parts, resources, data, settings
+samples/*.csv       example ERP-style files (parts, resources, steps, bom)
 test/test.js        unit tests (node test/test.js)
 test/e2e.js         browser smoke test (node test/e2e.js, needs playwright)
 ```
@@ -72,10 +90,14 @@ test/e2e.js         browser smoke test (node test/e2e.js, needs playwright)
 
 `parts.csv`: `item_nr, name, type (purchased|manufactured), unit, work_minutes, lead_time_days, notes`
 
+`resources.csv`: `name, type (equipment|labor), capacity, lot_size, process_hours, calendar (24/7|shop), notes`
+
 `steps.csv`: `recipe, step_nr, step_name, step_type, output_item_nr, components, work_minutes,
-workers, fixed_minutes, cure_hours, predecessors, notes` – `components` is `ITEM:qty|ITEM:qty`,
-`predecessors` lists extra step numbers.
+workers, worker_pool, fixed_minutes, process_hours, resource, lot_size, transfer_per_lot,
+predecessors, notes` – `components` is `ITEM:qty|ITEM:qty`, `resource` and `worker_pool` are
+resource names (created if missing), `predecessors` lists extra step numbers. The older
+`cure_hours` header is accepted for `process_hours`.
 
 `bom.csv`: `recipe, step_nr, component_item_nr, qty` (alternative to the inline components column)
 
-Parts referenced by steps but missing from the parts list are created automatically on import.
+Parts and resources referenced by steps but missing are created automatically on import.

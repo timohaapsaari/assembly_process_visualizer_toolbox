@@ -60,8 +60,17 @@
       '<label class="f"><span>Delivery date</span><input type="date" id="pl-due" value="' + UI.esc(p.dueDate) + '"></label>' +
       '<label class="f"><span>Time</span><input type="time" id="pl-duet" value="' + UI.esc(p.dueTime || cal.s.shiftEnd) + '"></label>' +
       '<label class="f"><span>Earliest start</span><div class="flex"><label class="check"><input type="checkbox" id="pl-now" ' + (p.startNow ? 'checked' : '') + '> now</label><input type="date" id="pl-start" value="' + UI.esc(p.planStartDate) + '" ' + (p.startNow ? 'disabled' : '') + '><input type="time" id="pl-startt" value="' + UI.esc(p.planStartTime || cal.s.shiftStart) + '" ' + (p.startNow ? 'disabled' : '') + '></div></label>' +
-      '</div><div class="form-row"><label class="f grow"><span>Notes</span><input type="text" id="pl-notes" style="width:100%" value="' + UI.esc(p.notes || '') + '"></label></div></div>');
+      '</div><div class="form-row"><label class="f grow"><span>Notes</span><input type="text" id="pl-notes" style="width:100%" value="' + UI.esc(p.notes || '') + '"></label></div>' +
+      '<div class="mt"><div class="flex"><b class="small">Sub-assembly due dates</b><span class="muted small">separate delivery dates for sub-assemblies (e.g. shipped ahead or to another site); optional extra pcs are added to the demand</span><span class="spacer"></span><button class="btn btn-sm" id="ms-add">+ Add sub-assembly due date</button></div><div id="ms-list" class="mt"></div></div></div>');
     host.appendChild(form);
+    p.milestones = p.milestones || [];
+    PlanUI.renderMilestones(p, form.querySelector('#ms-list'));
+    form.querySelector('#ms-add').addEventListener('click', () => {
+      const r = Store.recipe(p.recipeId); if (!r) { UI.toast('Select a recipe first', 'err'); return; }
+      const produced = r.steps.map(x => x.outputPartId).filter(x => x && x !== r.finalPartId);
+      p.milestones.push({ partId: produced[0] || null, dueDate: p.dueDate, dueTime: p.dueTime || cal.s.shiftEnd, qty: 0 });
+      Store.save(); PlanUI.renderMilestones(p, form.querySelector('#ms-list')); PlanUI.compute();
+    });
     const recalc = UI.debounce(() => PlanUI.compute(), 150);
     UI.bind(form.querySelector('#pl-name'), p, 'name', 'text', () => { const o = top.querySelector('#pl-sel option:checked'); if (o) o.textContent = p.name; });
     UI.bind(form.querySelector('#pl-recipe'), p, 'recipeId', 'text', recalc);
@@ -79,6 +88,27 @@
 
   PlanUI.fileBase = p => (p.name || 'plan').replace(/[^\w.-]+/g, '_');
 
+  PlanUI.renderMilestones = function (p, host) {
+    host.innerHTML = '';
+    const r = Store.recipe(p.recipeId); const pb = Store.partsById(); const cal = Store.calendar();
+    const produced = r ? Array.from(new Set(r.steps.map(x => x.outputPartId).filter(Boolean))) : [];
+    (p.milestones || []).forEach((m, i) => {
+      const row = UI.el('<div class="form-row" style="margin-bottom:6px">' +
+        '<label class="f"><span>Sub-assembly</span><select class="ms-part" style="min-width:280px">' + produced.map(pid => '<option value="' + pid + '"' + (pid === m.partId ? ' selected' : '') + '>' + UI.esc((pb[pid] || {}).itemNr + ' – ' + (pb[pid] || {}).name) + (pid === r.finalPartId ? ' (final product)' : '') + '</option>').join('') + '</select></label>' +
+        '<label class="f"><span>Due date</span><input type="date" class="ms-date" value="' + UI.esc(m.dueDate || '') + '"></label>' +
+        '<label class="f"><span>Time</span><input type="time" class="ms-time" value="' + UI.esc(m.dueTime || cal.s.shiftEnd) + '"></label>' +
+        '<label class="f"><span>Extra pcs delivered separately</span><input type="number" class="ms-qty" min="0" step="1" value="' + U.num(m.qty) + '"></label>' +
+        '<button class="btn btn-icon btn-danger" title="Remove" style="align-self:flex-end;margin-bottom:2px">✕</button></div>');
+      const recalc = () => { Store.save(); PlanUI.compute(); };
+      row.querySelector('.ms-part').addEventListener('change', e => { m.partId = e.target.value; recalc(); });
+      row.querySelector('.ms-date').addEventListener('change', e => { m.dueDate = e.target.value; recalc(); });
+      row.querySelector('.ms-time').addEventListener('change', e => { m.dueTime = e.target.value; recalc(); });
+      row.querySelector('.ms-qty').addEventListener('input', UI.debounce(e => { m.qty = Math.max(0, Math.round(U.num(e.target.value))); recalc(); }, 250));
+      row.querySelector('button').addEventListener('click', () => { p.milestones.splice(i, 1); Store.save(); PlanUI.renderMilestones(p, host); PlanUI.compute(); });
+      host.appendChild(row);
+    });
+  };
+
   PlanUI.compute = function () {
     const p = currentPlan(); const out = document.getElementById('pl-out'); if (!p || !out) return;
     const r = Store.recipe(p.recipeId);
@@ -90,7 +120,8 @@
     if (!planStart) planStart = new Date();
     planStart = cal.snapForward(planStart);
     const pb = Store.partsById();
-    const res = Scheduler.schedule({ recipe: r, partsById: pb, qty: p.qty, due, planStart, calendar: cal });
+    const milestones = (p.milestones || []).map(m => ({ partId: m.partId, due: U.parseLocal((m.dueDate || '') + ' ' + (m.dueTime || cal.s.shiftEnd)), qty: m.qty })).filter(m => m.partId && m.due);
+    const res = Scheduler.schedule({ recipe: r, partsById: pb, resourcesById: Store.resourcesById(), qty: p.qty, due, planStart, calendar: cal, milestones });
     PlanUI.result = res;
     PlanUI.renderResult(res);
   };
@@ -105,6 +136,10 @@
     const peak = load.reduce((m, d) => Math.max(m, d.peakWorkers), 0);
     const maxW = U.num(st.settings.maxWorkers, 0);
     const overload = maxW > 0 && load.filter(d => d.peakWorkers > maxW);
+    const rload = Scheduler.resourceLoad(res, mode, maxW);
+    PlanUI.rload = rload;
+    const conflicts = rload.filter(e => e.conflicts.length);
+    const bottleneck = rload.filter(e => e.resource.type !== 'labor' && e.utilization > 0).sort((a, b) => b.utilization - a.utilization)[0];
 
     let html = '';
     // KPI tiles
@@ -118,7 +153,12 @@
       '<div class="kpi ' + (res.late ? 'bad' : '') + '"><div class="k">Earliest finish (ASAP)</div><div class="v">' + U.niceDateTime(res.projectedFinish) + '</div><div class="s">' + (res.late ? 'late by ' + U.hoursToText(res.lateMinutes / 60) + ' working time' : 'starting ' + U.niceDateTime(res.planStart)) + '</div></div>' +
       '<div class="kpi"><div class="k">Labor</div><div class="v">' + U.round(res.totals.laborHours, 1) + ' h</div><div class="s">' + U.round(res.totals.laborHours / res.qty, 2) + ' h per pc · ' + U.round(res.totals.cureHours, 1) + ' h cure/wait</div></div>' +
       '<div class="kpi ' + (overload && overload.length ? 'bad' : '') + '"><div class="k">Peak workers</div><div class="v">' + peak + '</div><div class="s">' + (maxW ? (overload.length ? overload.length + ' day(s) over ' + maxW : 'within ' + maxW + ' available') : 'concurrently, ' + mode.toUpperCase() + ' schedule') + '</div></div>' +
+      '<div class="kpi ' + (conflicts.length ? 'bad' : '') + '"><div class="k">Bottleneck resource</div><div class="v" style="font-size:16px">' + (bottleneck ? UI.esc(bottleneck.resource.name) : '–') + '</div><div class="s">' + (bottleneck ? Math.round(bottleneck.utilization * 100) + '% busy over its active days' : 'no equipment assigned') + (conflicts.length ? ' · ' + conflicts.length + ' double-booked' : '') + '</div></div>' +
       '</div>';
+    // sub-assembly due dates
+    if (res.milestones.length) {
+      html += '<div class="kpis">' + res.milestones.map(m => '<div class="kpi ' + (m.late ? 'bad' : (m.LF && m.LF > m.due ? 'bad' : 'good')) + '"><div class="k">Sub-assembly due · ' + UI.esc((m.part || {}).itemNr || '') + '</div><div class="v" style="font-size:16px">' + (m.late ? 'Late by ' + U.hoursToText(m.lateMinutes / 60) : 'Achievable') + '</div><div class="s">due ' + U.niceDateTime(m.due) + (m.qty ? ' · +' + m.qty + ' pcs' : '') + (m.EF ? ' · earliest ' + U.niceDateTime(m.EF) : '') + '</div></div>').join('') + '</div>';
+    }
 
     // alerts
     const alerts = [];
@@ -126,6 +166,7 @@
     const latePurch = res.purchases.filter(x => x.orderLate);
     if (latePurch.length) alerts.push({ cls: 'warn', text: 'Material lead time exceeded for ' + latePurch.length + ' part(s): ' + latePurch.slice(0, 4).map(x => x.part.itemNr + ' (order by ' + U.niceDate(x.orderByJIT) + ')').join(', ') + (latePurch.length > 4 ? ', …' : '') + '. Check stock or expedite.' });
     res.warnings.forEach(w => alerts.push({ cls: w.level === 'error' ? 'err' : 'warn', text: w.text }));
+    conflicts.forEach(e => alerts.push({ cls: 'err', text: (e.resource.type === 'labor' ? 'Worker pool "' : 'Equipment "') + e.resource.name + '" (capacity ' + e.resource.capacity + ') is over capacity in the ' + mode.toUpperCase() + ' schedule: ' + e.conflicts.slice(0, 3).map(c => U.niceDateTime(c.a) + ' – ' + U.niceDateTime(c.b) + ' (' + c.load + ' needed)').join(', ') + (e.conflicts.length > 3 ? ' and ' + (e.conflicts.length - 3) + ' more' : '') + '. Competing lots are shown red in the resource occupancy chart; add capacity, change lot sizes or sequence the steps.' }));
     if (overload && overload.length) alerts.push({ cls: 'warn', text: 'Worker capacity (' + maxW + ') exceeded on ' + overload.map(d => U.niceDate(U.parseLocal(d.date)) + ' (' + d.peakWorkers + ')').join(', ') + '.' });
     html += alerts.map(a => '<div class="alert ' + a.cls + '">' + UI.esc(a.text) + '</div>').join('');
 
@@ -135,19 +176,20 @@
       '<label class="check"><input type="checkbox" id="g-crit" ' + (PlanUI.showCriticalOnly ? 'checked' : '') + '> critical path only</label>' +
       '<span class="spacer"></span><span class="muted small">zoom</span><span class="btn-group"><button class="btn btn-sm" data-zoom="out" title="Zoom out">−</button><button class="btn btn-sm" data-zoom="fit" title="Fit whole plan in view">Fit</button><button class="btn btn-sm" data-zoom="days" title="About 90 px per day">Days</button><button class="btn btn-sm" data-zoom="hours" title="Show hours">Hours</button><button class="btn btn-sm" data-zoom="in" title="Zoom in">+</button></span></div>' +
       '<div class="gantt-wrap" id="gantt"></div>' +
-      '<div class="gantt-legend"><span><i style="background:#2f6fed"></i>work (colour = step type)</span><span><i style="background:repeating-linear-gradient(45deg,#c46a1c,#c46a1c 3px,#fde8d3 3px,#fde8d3 6px)"></i>cure / wait</span><span><i style="background:#fff;border:2px solid var(--critical)"></i>critical path</span><span><i style="background:var(--nonwork)"></i>non-working time</span><span><i style="background:#cbd5e1;height:3px"></i>float (could start earlier)</span><span style="color:var(--accent)">│ start</span><span style="color:var(--danger)">│ due</span></div>' +
+      '<div class="gantt-legend"><span><i style="background:#2f6fed"></i>work (colour = step type)</span><span><i style="background:repeating-linear-gradient(45deg,#c46a1c,#c46a1c 3px,#fde8d3 3px,#fde8d3 6px)"></i>process / cure per lot</span><span><i style="background:#fff;border:2px solid var(--critical)"></i>critical path</span><span><i style="background:var(--nonwork)"></i>non-working time</span><span><i style="background:#cbd5e1;height:3px"></i>float (could start earlier)</span><span style="color:var(--accent)">│ start</span><span style="color:var(--danger)">│ due</span></div>' +
       '</div>';
 
+    html += '<div class="panel"><div class="panel-head"><h3>Resource occupancy</h3><span class="muted small">' + (mode === 'jit' ? 'JIT' : 'ASAP') + ' schedule · each lane is one unit of capacity (one fixture, one chamber, one person) · red = over capacity</span></div><div class="gantt-wrap" id="rgantt"></div></div>';
     html += '<div class="grid-2"><div class="panel"><div class="panel-head"><h3>Precedence network</h3><span class="muted small">arrows = must finish before</span></div><div class="net-wrap" id="net"></div></div>' +
       '<div class="panel"><div class="panel-head"><h3>Worker load per day</h3><span class="muted small">' + (mode === 'jit' ? 'JIT' : 'ASAP') + ' schedule · peak concurrent workers' + (maxW ? ' · limit ' + maxW : '') + '</span></div><div id="load"></div></div></div>';
 
     // schedule table
     const order = res.list.slice().sort((a, b) => (mode === 'jit' ? a.LS - b.LS : a.ES - b.ES) || U.num(a.step.nr) - U.num(b.step.nr));
-    html += '<div class="panel"><div class="panel-head"><h3>Step schedule</h3><span class="muted small">' + (mode === 'jit' ? 'latest start / finish (backward from due date)' : 'earliest start / finish (forward from start)') + '</span></div><div class="tbl-wrap"><table class="tbl" id="sched"><thead><tr><th>Step</th><th>Type</th><th>Output</th><th class="num">Units</th><th class="num">Workers</th><th class="num">Work</th><th class="num">Cure</th><th>Start</th><th>Work end</th><th>Finish</th><th class="num">Float</th><th>After</th></tr></thead><tbody>' +
+    html += '<div class="panel"><div class="panel-head"><h3>Step schedule</h3><span class="muted small">' + (mode === 'jit' ? 'latest start / finish (backward from due date)' : 'earliest start / finish (forward from start)') + '</span></div><div class="tbl-wrap"><table class="tbl" id="sched"><thead><tr><th>Step</th><th>Type</th><th>Output</th><th class="num">Units</th><th>Resource / lots</th><th class="num">Workers</th><th class="num">Work</th><th class="num">Process</th><th>Start</th><th>Work end</th><th>Finish</th><th class="num">Float</th><th>After</th></tr></thead><tbody>' +
       order.map(x => {
         const s = x.step, o = pb[s.outputPartId];
         const S = mode === 'jit' ? x.LS : x.ES, WE = mode === 'jit' ? x.LworkEnd : x.EworkEnd, F = mode === 'jit' ? x.LF : x.EF;
-        return '<tr class="' + (x.critical ? 'critical' : '') + (PlanUI.selectedStepId === s.id ? ' selected' : '') + '" data-id="' + s.id + '"><td><b>' + UI.esc(s.nr) + '</b> ' + UI.esc(s.name) + '</td><td>' + UI.typeBadge(s.type) + '</td><td class="mono">' + (o ? UI.esc(o.itemNr) : '') + '</td><td class="num">' + U.round(x.units, 2) + '</td><td class="num">' + x.workers + '</td><td class="num nowrap">' + U.minutesToText(x.workMinutes) + '</td><td class="num nowrap">' + (x.cureHours ? U.hoursToText(x.cureHours) : '–') + '</td><td class="nowrap">' + U.niceDateTime(S) + '</td><td class="nowrap">' + U.niceDateTime(WE) + '</td><td class="nowrap">' + U.niceDateTime(F) + '</td><td class="num nowrap">' + (x.critical ? '<span class="badge err">critical</span>' : U.hoursToText(x.floatMinutes / 60)) + '</td><td class="small muted">' + x.preds.map(id => res.rows[id].step.nr).join(', ') + '</td></tr>';
+        return '<tr class="' + (x.critical ? 'critical' : '') + (PlanUI.selectedStepId === s.id ? ' selected' : '') + '" data-id="' + s.id + '"><td><b>' + UI.esc(s.nr) + '</b> ' + UI.esc(s.name) + '</td><td>' + UI.typeBadge(s.type) + '</td><td class="mono">' + (o ? UI.esc(o.itemNr) : '') + '</td><td class="num">' + U.round(x.units, 2) + '</td><td class="small">' + (x.resource ? UI.esc(x.resource.name) + '<br>' : '') + (x.nLots > 1 ? x.nLots + ' lots' + (x.waves > 1 ? ' / ' + x.waves + ' waves' : '') + (x.transfer ? ' ⇢' : '') : (x.resource ? '1 lot' : '')) + '</td><td class="num">' + x.workers + (x.pool ? '<br><span class="small muted">' + UI.esc(x.pool.name) + '</span>' : '') + '</td><td class="num nowrap">' + U.minutesToText(x.workMinutes) + '</td><td class="num nowrap">' + (x.processHours ? U.hoursToText(x.processHours) + (x.nLots > 1 ? ' / lot' : '') : '–') + '</td><td class="nowrap">' + U.niceDateTime(S) + '</td><td class="nowrap">' + U.niceDateTime(WE) + '</td><td class="nowrap">' + U.niceDateTime(F) + '</td><td class="num nowrap">' + (x.critical ? '<span class="badge err">critical</span>' : U.hoursToText(x.floatMinutes / 60)) + '</td><td class="small muted">' + x.preds.map(id => res.rows[id].step.nr).join(', ') + '</td></tr>';
       }).join('') + '</tbody></table></div></div>';
 
     // materials
@@ -158,16 +200,18 @@
     out.innerHTML = html;
     out.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => { st.ui.ganttMode = b.dataset.mode; Store.save(); PlanUI.renderResult(res); }));
     out.querySelector('#g-crit').addEventListener('change', e => { PlanUI.showCriticalOnly = e.target.checked; PlanUI.drawGantt(res, mode); });
+    const legend = out.querySelector('.gantt-legend'); if (legend) legend.insertAdjacentHTML('beforeend', '<span style="color:#7c3aed">┆ sub-assembly due</span>');
     out.querySelectorAll('[data-zoom]').forEach(b => b.addEventListener('click', () => {
       const z = b.dataset.zoom;
       if (z === 'fit') st.ui.zoom = 1;
       else if (z === 'days' || z === 'hours') { const fitPx = PlanUI.lastFitPxPerDay || 40; st.ui.zoom = U.clamp((z === 'days' ? 90 : 320) / fitPx, 0.25, 60); }
       else st.ui.zoom = U.clamp((st.ui.zoom || 1) * (z === 'in' ? 1.5 : 1 / 1.5), 0.25, 60);
-      Store.save(); PlanUI.drawGantt(res, mode);
+      Store.save(); PlanUI.drawGantt(res, mode); PlanUI.drawResourceGantt(res, mode, PlanUI.rload);
       if (z !== 'fit') { const g = document.querySelector('#gantt .gantt-scroll'); const first = g && g.querySelector('g.bar rect'); if (first) g.scrollLeft = Math.max(0, +first.getAttribute('x') - 60); }
     }));
     out.querySelectorAll('#sched tbody tr').forEach(tr => tr.addEventListener('click', () => { PlanUI.select(tr.dataset.id, res, mode); }));
     PlanUI.drawGantt(res, mode);
+    PlanUI.drawResourceGantt(res, mode, rload);
     PlanUI.drawNetwork(res, mode);
     PlanUI.drawLoad(load, maxW);
   };
@@ -175,7 +219,7 @@
   PlanUI.select = function (id, res, mode) {
     PlanUI.selectedStepId = PlanUI.selectedStepId === id ? null : id;
     document.querySelectorAll('#sched tbody tr').forEach(tr => tr.classList.toggle('selected', tr.dataset.id === PlanUI.selectedStepId));
-    PlanUI.drawGantt(res, mode); PlanUI.drawNetwork(res, mode);
+    PlanUI.drawGantt(res, mode); PlanUI.drawNetwork(res, mode); PlanUI.drawResourceGantt(res, mode, PlanUI.rload);
   };
 
   /* ---------- Gantt ---------- */
@@ -183,9 +227,10 @@
     const s = x.step, o = pb[s.outputPartId];
     const S = mode === 'jit' ? x.LS : x.ES, WE = mode === 'jit' ? x.LworkEnd : x.EworkEnd, F = mode === 'jit' ? x.LF : x.EF;
     return '<b>' + UI.esc(s.nr + ' ' + s.name) + '</b>' + (x.critical ? ' <span style="color:#fca5a5">critical</span>' : '') + '<br>' + Scheduler.typeInfo(s.type).label + (o ? ' → ' + UI.esc(o.itemNr) + ' ' + UI.esc(o.name) : '') +
-      '<br>' + U.round(x.units, 2) + ' units · ' + x.workers + ' worker(s) · ' + U.round(x.laborHours, 1) + ' labor h' +
-      '<br>Work: ' + U.niceDateTime(S) + ' → ' + U.niceDateTime(WE) + ' (' + U.minutesToText(x.workMinutes) + ')' +
-      (x.cureHours ? '<br>Cure/wait: ' + U.hoursToText(x.cureHours) + ' → ' + U.niceDateTime(F) : '') +
+      '<br>' + U.round(x.units, 2) + ' units · ' + x.workers + ' worker(s)' + (x.pool ? ' from ' + UI.esc(x.pool.name) : '') + ' · ' + U.round(x.laborHours, 1) + ' labor h' +
+      (x.resource ? '<br>On ' + UI.esc(x.resource.name) + ': ' + x.nLots + ' lot(s) of ≤' + (x.lotSize || x.units) + ' pcs, ' + x.resource.capacity + ' at a time → ' + x.waves + ' wave(s)' + (x.transfer ? ', next step per lot' : '') : (x.nLots > 1 ? '<br>' + x.nLots + ' lots of ' + x.lotSize + (x.transfer ? ', next step per lot' : '') : '')) +
+      '<br>Work: ' + U.niceDateTime(S) + ' → ' + U.niceDateTime(WE) + ' (' + U.minutesToText(x.workMinutes) + ' attended)' +
+      (x.processHours ? '<br>Process: ' + U.hoursToText(x.processHours) + ' per lot (' + (x.procCal === 'shop' ? 'shop hours' : '24/7') + ') → last lot done ' + U.niceDateTime(F) : '') +
       '<br>Float: ' + U.hoursToText(x.floatMinutes / 60) + (mode === 'jit' ? ' · earliest start ' + U.niceDateTime(x.ES) : ' · latest start ' + U.niceDateTime(x.LS)) +
       ((s.components || []).length ? '<br>Uses: ' + s.components.map(c => (pb[c.partId] ? pb[c.partId].itemNr : '?') + '×' + U.round(c.qty * x.units, 2)).join(', ') : '') +
       (s.notes ? '<br><i>' + UI.esc(s.notes) + '</i>' : '');
@@ -260,22 +305,26 @@
       if (mode === 'asap' && x.LS > x.ES) svg += '<line x1="' + X(x.EF) + '" y1="' + (y + rowH / 2) + '" x2="' + X(x.LF) + '" y2="' + (y + rowH / 2) + '" stroke="#cbd5e1" stroke-width="3" stroke-linecap="round"/>';
       const g = '<g class="bar" data-id="' + s.id + '" style="cursor:pointer">';
       let bars = '';
-      // work: full extent faint, working windows solid
-      if (WE > S) {
-        bars += '<rect x="' + X(S) + '" y="' + (by + 2) + '" width="' + Math.max(1, X(WE) - X(S)) + '" height="' + (bh - 4) + '" fill="' + col + '" opacity="0.25" rx="2"/>';
-        Scheduler.workSegments(cal, S, WE).forEach(seg => { bars += '<rect x="' + X(seg.a) + '" y="' + by + '" width="' + Math.max(1.5, X(seg.b) - X(seg.a)) + '" height="' + bh + '" fill="' + col + '" rx="2"/>'; });
-      } else bars += '<rect x="' + (X(S) - 1) + '" y="' + by + '" width="2" height="' + bh + '" fill="' + col + '"/>';
-      if (F > WE) bars += '<rect x="' + X(WE) + '" y="' + (by + 2) + '" width="' + Math.max(1, X(F) - X(WE)) + '" height="' + (bh - 4) + '" fill="url(#cureHatch)" stroke="#c46a1c" stroke-width="0.5" rx="2"/>';
+      const lots = Scheduler.lotsOf(x, mode);
+      // faint span of the whole step, then per lot: attended work solid (in working windows), process hatched
+      bars += '<rect x="' + X(S) + '" y="' + (by + 3) + '" width="' + Math.max(1, X(F) - X(S)) + '" height="' + (bh - 6) + '" fill="' + col + '" opacity="0.15" rx="2"/>';
+      const many = lots.length > 1;
+      lots.forEach(l => {
+        if (l.attEnd > l.attStart) Scheduler.workSegments(cal, l.attStart, l.attEnd).forEach(seg => { bars += '<rect x="' + X(seg.a) + '" y="' + by + '" width="' + Math.max(1.5, X(seg.b) - X(seg.a)) + '" height="' + bh + '" fill="' + col + '" rx="2"/>'; });
+        else bars += '<rect x="' + (X(l.attStart) - 1) + '" y="' + by + '" width="2" height="' + bh + '" fill="' + col + '"/>';
+        if (l.procEnd > l.attEnd) bars += '<rect x="' + X(l.attEnd) + '" y="' + (by + 2) + '" width="' + Math.max(1, X(l.procEnd) - X(l.attEnd)) + '" height="' + (bh - 4) + '" fill="url(#cureHatch)" stroke="#c46a1c" stroke-width="0.5" opacity="' + (many ? 0.55 : 1) + '" rx="2"/>';
+      });
       if (x.critical) bars += '<rect x="' + (X(S) - 1.5) + '" y="' + (by - 1.5) + '" width="' + Math.max(3, X(F) - X(S) + 3) + '" height="' + (bh + 3) + '" fill="none" stroke="var(--critical)" stroke-width="1.5" rx="3"/>';
       // label inside/after bar
       const lx = X(F) + 5;
-      if (lx < W - 40) bars += '<text x="' + lx + '" y="' + (y + rowH / 2 + 4) + '" fill="#64748b" font-size="10">' + U.minutesToText(x.workMinutes) + (x.cureHours ? ' +' + U.hoursToText(x.cureHours) : '') + '</text>';
+      if (lx < W - 40) bars += '<text x="' + lx + '" y="' + (y + rowH / 2 + 4) + '" fill="#64748b" font-size="10">' + U.minutesToText(x.workMinutes) + (x.processHours ? ' +' + U.hoursToText(x.processHours) + (x.nLots > 1 ? '/lot' : '') : '') + (x.nLots > 1 ? ' · ' + x.nLots + ' lots' : '') + '</text>';
       svg += g + bars + '<rect x="' + X(S) + '" y="' + y + '" width="' + Math.max(6, X(F) - X(S)) + '" height="' + rowH + '" fill="transparent"/></g>';
     });
     // today / due lines
     const lineX = (t, colr, label, anchorRight) => '<line x1="' + X(t) + '" y1="20" x2="' + X(t) + '" y2="' + H + '" stroke="' + colr + '" stroke-width="1.5" stroke-dasharray="4 3"/><text x="' + (X(t) + (anchorRight ? -4 : 4)) + '" y="' + (H - 2) + '" fill="' + colr + '" font-size="10" font-weight="600" text-anchor="' + (anchorRight ? 'end' : 'start') + '">' + label + '</text>';
     svg += lineX(res.planStart, 'var(--accent)', 'start ' + U.hhmm(res.planStart));
     svg += lineX(res.due, 'var(--danger)', 'due ' + U.niceDateTime(res.due), true);
+    (res.milestones || []).forEach(m => { svg += '<line x1="' + X(m.due) + '" y1="20" x2="' + X(m.due) + '" y2="' + H + '" stroke="' + (m.late ? 'var(--danger)' : '#7c3aed') + '" stroke-width="1.2" stroke-dasharray="2 3"/><text x="' + (X(m.due) - 4) + '" y="30" fill="' + (m.late ? 'var(--danger)' : '#7c3aed') + '" font-size="9.5" font-weight="600" text-anchor="end">' + UI.esc((m.part || {}).itemNr || '') + ' due</text>'; });
     svg += '</svg>';
     // labels column in its own (non-scrolling) SVG
     let lab = '<svg xmlns="http://www.w3.org/2000/svg" width="' + labelW + '" height="' + H + '" font-family="system-ui, sans-serif" font-size="11"><rect x="0" y="0" width="' + labelW + '" height="' + H + '" fill="#fff"/><line x1="' + (labelW - 1) + '" y1="0" x2="' + (labelW - 1) + '" y2="' + H + '" stroke="#dbe1ea"/>';
@@ -289,7 +338,7 @@
       lab += '<g class="lab" data-id="' + s.id + '" style="cursor:pointer"><rect x="0" y="' + y + '" width="' + labelW + '" height="' + rowH + '" fill="transparent"/><rect x="6" y="' + (y + 8) + '" width="4" height="' + (rowH - 16) + '" fill="' + col + '" rx="1"/>';
       const name = (s.nr + ' ' + s.name);
       lab += '<text x="16" y="' + (y + 13) + '" fill="#1b2430" font-weight="' + (x.critical ? '600' : '400') + '">' + UI.esc(name.length > 38 ? name.slice(0, 37) + '…' : name) + '</text>';
-      lab += '<text x="16" y="' + (y + 24) + '" fill="#64748b" font-size="9.5">' + U.round(x.units, 1) + ' pcs · ' + x.workers + ' w · ' + U.niceDateTime(start(x)) + '</text></g>';
+      lab += '<text x="16" y="' + (y + 24) + '" fill="#64748b" font-size="9.5">' + U.round(x.units, 1) + ' pcs · ' + x.workers + ' w' + (x.resource ? ' · ' + UI.esc(x.resource.name.length > 14 ? x.resource.name.slice(0, 13) + '…' : x.resource.name) : '') + ' · ' + U.niceDateTime(start(x)) + '</text></g>';
     });
     lab += '<text x="8" y="14" fill="#64748b" font-weight="600">' + (mode === 'jit' ? 'Backward (JIT) schedule' : 'Forward (ASAP) schedule') + '</text>';
     lab += '<text x="8" y="33" fill="#94a3b8" font-size="10">' + rows.length + ' steps · hover bars for details</text>';
@@ -311,6 +360,83 @@
       g.addEventListener('mouseleave', UI.hideTip);
       g.addEventListener('click', () => PlanUI.select(g.dataset.id, res, mode));
     });
+  };
+
+  /* ---------- Resource Gantt ---------- */
+  PlanUI.drawResourceGantt = function (res, mode, rload) {
+    const wrap = document.getElementById('rgantt'); if (!wrap) return;
+    if (!rload || !rload.length) { wrap.innerHTML = '<p class="muted small" style="padding:10px">No resources assigned to steps. Add equipment and worker pools on the Resources tab and select them on the recipe steps.</p>'; return; }
+    const st = Store.state, cal = res.calendar;
+    let t0 = new Date(Math.min(res.planStart, res.requiredStart, res.due)), t1 = new Date(Math.max(res.due, res.projectedFinish, res.planStart));
+    res.list.forEach(x => { if (x.ES < t0) t0 = x.ES; if (x.LF > t1) t1 = x.LF; });
+    t0 = new Date(t0.getFullYear(), t0.getMonth(), t0.getDate()); t1 = new Date(t1.getFullYear(), t1.getMonth(), t1.getDate() + 1);
+    const totalH = (t1 - t0) / 3600000;
+    const labelW = 250, headH = 40, padR = 20, laneH = 9;
+    const avail = Math.max(400, wrap.clientWidth - labelW - padR - 2);
+    const pxh = Math.max(0.5, (avail / totalH) * (st.ui.zoom || 1));
+    const X = t => ((t - t0) / 3600000) * pxh;
+    // lane assignment per resource (greedy interval colouring, an interval takes w lanes)
+    const rowsR = rload.map(e => {
+      const cap = Math.max(1, Math.round(U.num(e.resource.capacity, 1)));
+      const ivs = e.intervals.slice().sort((a, b) => a.a - b.a || a.b - b.b);
+      const laneFree = [];
+      ivs.forEach(iv => {
+        let lane = -1;
+        for (let k = 0; k + iv.w <= laneFree.length; k++) { let ok = true; for (let m = 0; m < iv.w; m++) { if (laneFree[k + m] > iv.a) { ok = false; break; } } if (ok) { lane = k; break; } }
+        if (lane < 0) { lane = laneFree.length; for (let m = 0; m < iv.w; m++) laneFree.push(null); }
+        for (let m = 0; m < iv.w; m++) laneFree[lane + m] = iv.b;
+        iv.lane = lane;
+      });
+      const lanes = Math.max(cap, laneFree.length, 1);
+      return { e, cap, ivs, lanes, h: Math.max(26, lanes * laneH + 8) };
+    });
+    const H = headH + rowsR.reduce((a, r) => a + r.h, 0) + 10, W = totalH * pxh + padR;
+    let svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + Math.ceil(W) + '" height="' + H + '" font-family="system-ui, sans-serif" font-size="11"><rect width="' + W + '" height="' + H + '" fill="#fff"/>';
+    const days = Math.round(totalH / 24), dayPx = 24 * pxh;
+    for (let i = 0; i < days; i++) {
+      const d = new Date(t0.getFullYear(), t0.getMonth(), t0.getDate() + i);
+      const x = X(d), xe = X(new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1));
+      if (!cal.isWorkingDay(d)) svg += '<rect x="' + x + '" y="' + headH + '" width="' + (xe - x) + '" height="' + (H - headH) + '" fill="var(--nonwork)"/>';
+      svg += '<line x1="' + x + '" y1="20" x2="' + x + '" y2="' + H + '" stroke="#e5e9f0"/>';
+      if (dayPx > 34) svg += '<text x="' + (x + 3) + '" y="33" fill="#334155">' + (dayPx > 60 ? U.dayName(d) + ' ' : '') + d.getDate() + '.' + (d.getMonth() + 1) + '.</text>';
+      else if (d.getDay() === 1) svg += '<text x="' + (x + 2) + '" y="33" fill="#334155">' + d.getDate() + '.' + (d.getMonth() + 1) + '.</text>';
+    }
+    let y = headH;
+    let lab = '<svg xmlns="http://www.w3.org/2000/svg" width="' + labelW + '" height="' + H + '" font-family="system-ui, sans-serif" font-size="11"><rect width="' + labelW + '" height="' + H + '" fill="#fff"/><line x1="' + (labelW - 1) + '" y1="0" x2="' + (labelW - 1) + '" y2="' + H + '" stroke="#dbe1ea"/>';
+    lab += '<text x="8" y="14" fill="#64748b" font-weight="600">Resources</text>';
+    rowsR.forEach(r => {
+      const e = r.e, over = e.conflicts.length;
+      svg += '<line x1="0" y1="' + (y + r.h) + '" x2="' + W + '" y2="' + (y + r.h) + '" stroke="#dbe1ea"/>';
+      const capY = y + 4 + r.cap * laneH;
+      if (r.lanes > r.cap) svg += '<line x1="0" y1="' + capY + '" x2="' + W + '" y2="' + capY + '" stroke="var(--danger)" stroke-dasharray="3 3"/>';
+      r.ivs.forEach(iv => {
+        const col = Scheduler.typeInfo(iv.row.step.type).color;
+        const ly = y + 4 + iv.lane * laneH, lh = iv.w * laneH - 2;
+        const bad = iv.lane + iv.w > r.cap;
+        const sel = PlanUI.selectedStepId === iv.row.step.id;
+        svg += '<g class="riv" data-id="' + iv.row.step.id + '" data-j="' + iv.j + '" style="cursor:pointer"><rect x="' + X(iv.a) + '" y="' + ly + '" width="' + Math.max(1.5, X(iv.b) - X(iv.a)) + '" height="' + lh + '" fill="' + (bad ? 'var(--danger)' : col) + '" opacity="' + (sel ? 1 : 0.85) + '" rx="1.5"' + (sel ? ' stroke="#111827" stroke-width="1.5"' : '') + '/></g>';
+      });
+      lab += '<text x="8" y="' + (y + 15) + '" fill="#1b2430" font-weight="600">' + UI.esc(e.resource.name.length > 30 ? e.resource.name.slice(0, 29) + '…' : e.resource.name) + '</text>';
+      lab += '<text x="8" y="' + (y + 26) + '" fill="' + (over ? 'var(--danger)' : '#64748b') + '" font-size="9.5">' + (e.resource.type === 'labor' ? 'pool of ' + r.cap : 'capacity ' + r.cap + (U.num(e.resource.lotSize) ? ' × lot ' + e.resource.lotSize : '')) + ' · ' + Math.round(e.utilization * 100) + '% busy' + (over ? ' · ' + over + ' overbooking' : '') + '</text>';
+      y += r.h;
+    });
+    const lineX = (t, colr) => '<line x1="' + X(t) + '" y1="20" x2="' + X(t) + '" y2="' + H + '" stroke="' + colr + '" stroke-width="1.5" stroke-dasharray="4 3"/>';
+    svg += lineX(res.planStart, 'var(--accent)') + lineX(res.due, 'var(--danger)') + '</svg>';
+    lab += '</svg>';
+    const main = document.querySelector('#gantt .gantt-scroll');
+    const prev = wrap.querySelector('.gantt-scroll') ? wrap.querySelector('.gantt-scroll').scrollLeft : (main ? main.scrollLeft : 0);
+    wrap.innerHTML = '<div class="gantt-labels">' + lab + '</div><div class="gantt-scroll">' + svg + '</div>';
+    wrap.querySelector('.gantt-scroll').scrollLeft = prev;
+    wrap.querySelectorAll('g.riv').forEach(g => {
+      const x = res.rows[g.dataset.id]; const l = Scheduler.lotsOf(x, mode)[+g.dataset.j];
+      g.addEventListener('mouseenter', e => UI.showTip('<b>' + UI.esc(x.step.nr + ' ' + x.step.name) + '</b> · lot ' + (+g.dataset.j + 1) + '/' + x.nLots + ' (' + U.round(l.units, 2) + ' pcs)<br>' + U.niceDateTime(l.attStart) + ' → ' + U.niceDateTime(l.procEnd) + '<br>attended until ' + U.niceDateTime(l.attEnd) + (x.processHours ? ', then ' + U.hoursToText(x.processHours) + ' process' : ''), e.clientX, e.clientY));
+      g.addEventListener('mousemove', e => UI.moveTip(e.clientX, e.clientY));
+      g.addEventListener('mouseleave', UI.hideTip);
+      g.addEventListener('click', () => PlanUI.select(g.dataset.id, res, mode));
+    });
+    // keep both charts scrolled together
+    const b = wrap.querySelector('.gantt-scroll');
+    if (main && b) { main.onscroll = () => { if (b.scrollLeft !== main.scrollLeft) b.scrollLeft = main.scrollLeft; }; b.onscroll = () => { if (main.scrollLeft !== b.scrollLeft) main.scrollLeft = b.scrollLeft; }; }
   };
 
   /* ---------- Precedence network ---------- */
@@ -349,7 +475,7 @@
       svg += '<g class="node" data-id="' + id + '" style="cursor:pointer"><rect x="' + P.x + '" y="' + P.y + '" width="' + nW + '" height="' + nH + '" rx="6" fill="' + (sel ? '#e8effd' : '#fff') + '" stroke="' + (x.critical ? '#d33c3c' : '#cbd5e1') + '" stroke-width="' + (x.critical ? 2 : 1) + '"/>' +
         '<rect x="' + P.x + '" y="' + P.y + '" width="5" height="' + nH + '" rx="2" fill="' + col + '"/>' +
         '<text x="' + (P.x + 12) + '" y="' + (P.y + 17) + '" font-weight="600" fill="#1b2430">' + UI.esc(name.length > 26 ? name.slice(0, 25) + '…' : name) + '</text>' +
-        '<text x="' + (P.x + 12) + '" y="' + (P.y + 31) + '" fill="#64748b" font-size="10">' + U.minutesToText(x.workMinutes) + (x.cureHours ? ' + ' + U.hoursToText(x.cureHours) + ' cure' : '') + ' · ' + x.workers + ' w</text>' +
+        '<text x="' + (P.x + 12) + '" y="' + (P.y + 31) + '" fill="#64748b" font-size="10">' + U.minutesToText(x.workMinutes) + (x.processHours ? ' + ' + U.hoursToText(x.processHours) + (x.nLots > 1 ? '/lot' : '') : '') + (x.nLots > 1 ? ' · ' + x.nLots + ' lots' : '') + ' · ' + x.workers + ' w</text>' +
         '<text x="' + (P.x + 12) + '" y="' + (P.y + 42) + '" fill="#64748b" font-size="9.5">' + U.niceDateTime(mode === 'jit' ? x.LS : x.ES) + ' → ' + U.niceDateTime(mode === 'jit' ? x.LF : x.EF) + '</text></g>';
     });
     svg += '</svg>';

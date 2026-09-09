@@ -148,4 +148,86 @@ t('load profile', () => {
   assert.ok(fri.peakWorkers >= 2);
 });
 
+
+/* ---------- Lots & resources ---------- */
+const resources = {
+  fix: { id: 'fix', name: 'Bonding fixtures', type: 'equipment', capacity: 6, lotSize: 1, calendar: '24_7' },
+  oven: { id: 'oven', name: 'Curing oven', type: 'equipment', capacity: 1, lotSize: 20, calendar: 'shop' },
+  cab: { id: 'cab', name: 'Test cabinet 1', type: 'equipment', capacity: 1, lotSize: 4, calendar: '24_7' },
+  asm: { id: 'asm', name: 'Assemblers', type: 'labor', capacity: 2 }
+};
+const recipe2 = {
+  id: 'r2', name: 'Lots', finalPartId: 'fin',
+  steps: [
+    { id: 'b', nr: 10, name: 'Bond', type: 'bonding', outputPartId: 'pist', components: [{ partId: 'seal', qty: 1 }], workMinutes: 25, workers: 1, fixedMinutes: 5, processHours: 12, resourceId: 'fix', transferPerLot: true },
+    { id: 'a', nr: 20, name: 'Assemble', type: 'assembly', outputPartId: 'fin', components: [{ partId: 'pist', qty: 1 }, { partId: 'hous', qty: 1 }], workMinutes: 30, workers: 1, fixedMinutes: 0, processHours: 0, lotSize: 1, workerPoolId: 'asm' }
+  ]
+};
+const mon = new Date(2026, 8, 14, 7, 0), fri = new Date(2026, 8, 25, 15, 30);
+
+t('fixtures: 12 pcs on 6 fixtures with 12 h cure = 2 waves', () => {
+  const res = S.schedule({ recipe: recipe2, partsById: parts, resourcesById: resources, qty: 12, due: fri, planStart: mon, calendar: cal });
+  const b = res.rows.b;
+  assert.strictEqual(b.nLots, 12); assert.strictEqual(b.waves, 2);
+  assert.strictEqual(U.isoDateTime(b.lotsE[0].attStart), '2026-09-14 07:00');
+  assert.strictEqual(U.isoDateTime(b.lotsE[0].procEnd), '2026-09-14 19:30');
+  assert.strictEqual(U.isoDateTime(b.lotsE[5].attEnd), '2026-09-14 10:00');
+  assert.strictEqual(U.isoDateTime(b.lotsE[6].attStart), '2026-09-15 07:00'); // waits for fixture 1
+  assert.strictEqual(U.isoDateTime(b.EF), '2026-09-15 22:00');
+});
+t('transfer per lot lets assembly start on first cured piece', () => {
+  const res = S.schedule({ recipe: recipe2, partsById: parts, resourcesById: resources, qty: 12, due: fri, planStart: mon, calendar: cal });
+  const a = res.rows.a;
+  assert.strictEqual(a.nLots, 12);
+  assert.strictEqual(U.isoDateTime(a.lotsE[0].attStart), '2026-09-15 07:00'); // lot 0 cured Mon 19:30 -> Tue 07:00
+  assert.strictEqual(U.isoDateTime(a.lotsE[6].attStart), '2026-09-16 07:00'); // 7th piece cured Tue 19:30
+  const r2 = JSON.parse(JSON.stringify(recipe2)); r2.steps[0].transferPerLot = false;
+  const res2 = S.schedule({ recipe: r2, partsById: parts, resourcesById: resources, qty: 12, due: fri, planStart: mon, calendar: cal });
+  assert.strictEqual(U.isoDateTime(res2.rows.a.ES), '2026-09-16 07:00'); // waits for all cured (Tue 22:00)
+});
+t('backward lot schedule is feasible: forward from required start finishes by due', () => {
+  const res = S.schedule({ recipe: recipe2, partsById: parts, resourcesById: resources, qty: 12, due: fri, planStart: mon, calendar: cal });
+  assert.ok(res.rows.b.LF <= res.rows.a.LS || res.rows.b.transfer);
+  assert.ok(res.requiredStart > mon);
+  const res2 = S.schedule({ recipe: recipe2, partsById: parts, resourcesById: resources, qty: 12, due: fri, planStart: res.requiredStart, calendar: cal });
+  assert.ok(res2.projectedFinish <= fri, 'finish ' + U.isoDateTime(res2.projectedFinish));
+  // fixtures respected in the backward schedule too: lot j+6 starts after lot j cured
+  const b = res.rows.b;
+  for (let j = 0; j + 6 < b.nLots; j++) assert.ok(b.lotsL[j].procEnd <= b.lotsL[j + 6].attStart);
+});
+t('oven in shop calendar: 25 pcs, lot 20, 4 h -> 2 lots sequential', () => {
+  const r3 = { id: 'r3', name: 'Oven', finalPartId: 'fin', steps: [{ id: 'o', nr: 10, name: 'Cure', type: 'bonding', outputPartId: 'fin', components: [{ partId: 'seal', qty: 1 }], workMinutes: 2, workers: 1, fixedMinutes: 10, processHours: 4, resourceId: 'oven' }] };
+  const res = S.schedule({ recipe: r3, partsById: parts, resourcesById: resources, qty: 25, due: fri, planStart: mon, calendar: cal });
+  const o = res.rows.o;
+  assert.strictEqual(o.nLots, 2); assert.strictEqual(o.lotsE[1].units, 5);
+  assert.strictEqual(U.isoDateTime(o.lotsE[0].attEnd), '2026-09-14 07:50'); // 10 + 40
+  assert.strictEqual(U.isoDateTime(o.lotsE[0].procEnd), '2026-09-14 12:20'); // 4 h working incl. lunch
+  assert.strictEqual(U.isoDateTime(o.lotsE[1].attStart), '2026-09-14 12:20'); // oven busy until then
+});
+t('resource conflicts detected across steps', () => {
+  const r4 = { id: 'r4', name: 'Cab', finalPartId: 'fin', steps: [
+    { id: 't1', nr: 10, name: 'Test A', type: 'test', outputPartId: 'pist', components: [{ partId: 'seal', qty: 1 }], workMinutes: 0, workers: 1, fixedMinutes: 10, processHours: 6, resourceId: 'cab' },
+    { id: 't2', nr: 20, name: 'Test B', type: 'test', outputPartId: 'fin', components: [{ partId: 'hous', qty: 1 }], workMinutes: 0, workers: 1, fixedMinutes: 10, processHours: 6, resourceId: 'cab', extraPreds: [] },
+    { id: 'f', nr: 30, name: 'Join', type: 'assembly', outputPartId: 'fin', components: [{ partId: 'pist', qty: 1 }, { partId: 'fin', qty: 1 }], workMinutes: 5, workers: 1 }
+  ] };
+  const res = S.schedule({ recipe: r4, partsById: parts, resourcesById: resources, qty: 4, due: fri, planStart: mon, calendar: cal });
+  const load = S.resourceLoad(res, 'asap', 0);
+  const cab = load.find(e => e.resource.id === 'cab');
+  assert.ok(cab.conflicts.length >= 1, 'expected a double booking of the cabinet');
+  assert.strictEqual(cab.peak, 2);
+  const pool = S.resourceLoad(res, 'asap', 1).find(e => e.resource.general);
+  assert.ok(pool.conflicts.length >= 1);
+});
+
+t('sub-assembly due date constrains its producing step and adds extra demand', () => {
+  const ms = [{ partId: 'pist', due: new Date(2026, 8, 18, 15, 30), qty: 3 }];
+  const res = S.schedule({ recipe, partsById: parts, qty: 10, due: new Date(2026, 8, 25, 15, 30), planStart: new Date(2026, 8, 14, 7, 0), calendar: cal, milestones: ms });
+  assert.strictEqual(res.rows.s1.units, 13);
+  assert.ok(res.rows.s1.LF <= ms[0].due, 'bond must finish by sub-assembly due: ' + U.isoDateTime(res.rows.s1.LF));
+  assert.strictEqual(res.milestones.length, 1);
+  assert.strictEqual(res.milestones[0].late, false);
+  const res2 = S.schedule({ recipe, partsById: parts, qty: 10, due: new Date(2026, 8, 25, 15, 30), planStart: new Date(2026, 8, 14, 7, 0), calendar: cal, milestones: [{ partId: 'pist', due: new Date(2026, 8, 14, 9, 0) }] });
+  assert.strictEqual(res2.milestones[0].late, true);
+  assert.strictEqual(res2.startsInPast, true);
+});
 console.log('\n' + passed + ' tests passed' + (process.exitCode ? ', some FAILED' : ''));
