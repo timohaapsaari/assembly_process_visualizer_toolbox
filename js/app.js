@@ -41,6 +41,20 @@
     });
   };
 
+  /** Jump to a step's card in the recipe builder (double-click from the plan). */
+  App.editStep = function (recipeId, stepId) {
+    if (recipeId) { Store.state.ui.recipeId = recipeId; Store.save(); }
+    App.showTab('recipes');
+    setTimeout(() => {
+      const card = document.querySelector('.step-card[data-id="' + stepId + '"]');
+      if (!card) return;
+      document.querySelectorAll('.step-card.selected').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+      card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      const n = card.querySelector('input.name'); if (n) n.focus({ preventScroll: true });
+    }, 60);
+  };
+
   App.help = function () {
     UI.modal('<h2>How to use</h2><div class="help">' +
       '<h3>1. Parts</h3><p>Define every item: purchased components (with supplier lead time) and manufactured sub-assemblies / products (with default work time per unit). Or import from your ERP as CSV.</p>' +

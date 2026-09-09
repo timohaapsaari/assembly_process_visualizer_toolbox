@@ -185,7 +185,7 @@
 
     // schedule table
     const order = res.list.slice().sort((a, b) => (mode === 'jit' ? a.LS - b.LS : a.ES - b.ES) || U.num(a.step.nr) - U.num(b.step.nr));
-    html += '<div class="panel"><div class="panel-head"><h3>Step schedule</h3><span class="muted small">' + (mode === 'jit' ? 'latest start / finish (backward from due date)' : 'earliest start / finish (forward from start)') + '</span></div><div class="tbl-wrap"><table class="tbl" id="sched"><thead><tr><th>Step</th><th>Type</th><th>Output</th><th class="num">Units</th><th>Resource / lots</th><th class="num">Workers</th><th class="num">Work</th><th class="num">Process</th><th>Start</th><th>Work end</th><th>Finish</th><th class="num">Float</th><th>After</th></tr></thead><tbody>' +
+    html += '<div class="panel"><div class="panel-head"><h3>Step schedule</h3><span class="muted small">' + (mode === 'jit' ? 'latest start / finish (backward from due date)' : 'earliest start / finish (forward from start)') + ' · double-click a row to edit the step</span></div><div class="tbl-wrap"><table class="tbl" id="sched"><thead><tr><th>Step</th><th>Type</th><th>Output</th><th class="num">Units</th><th>Resource / lots</th><th class="num">Workers</th><th class="num">Work</th><th class="num">Process</th><th>Start</th><th>Work end</th><th>Finish</th><th class="num">Float</th><th>After</th></tr></thead><tbody>' +
       order.map(x => {
         const s = x.step, o = pb[s.outputPartId];
         const S = mode === 'jit' ? x.LS : x.ES, WE = mode === 'jit' ? x.LworkEnd : x.EworkEnd, F = mode === 'jit' ? x.LF : x.EF;
@@ -209,7 +209,7 @@
       Store.save(); PlanUI.drawGantt(res, mode); PlanUI.drawResourceGantt(res, mode, PlanUI.rload);
       if (z !== 'fit') { const g = document.querySelector('#gantt .gantt-scroll'); const first = g && g.querySelector('g.bar rect'); if (first) g.scrollLeft = Math.max(0, +first.getAttribute('x') - 60); }
     }));
-    out.querySelectorAll('#sched tbody tr').forEach(tr => tr.addEventListener('click', () => { PlanUI.select(tr.dataset.id, res, mode); }));
+    out.querySelectorAll('#sched tbody tr').forEach(tr => { tr.addEventListener('click', () => { PlanUI.select(tr.dataset.id, res, mode); }); tr.addEventListener('dblclick', () => root.App.editStep(res.recipe.id, tr.dataset.id)); tr.title = 'Click to highlight, double-click to edit the step'; });
     PlanUI.drawGantt(res, mode);
     PlanUI.drawResourceGantt(res, mode, rload);
     PlanUI.drawNetwork(res, mode);
@@ -233,7 +233,7 @@
       (x.processHours ? '<br>Process: ' + U.hoursToText(x.processHours) + ' per lot (' + (x.procCal === 'shop' ? 'shop hours' : '24/7') + ') → last lot done ' + U.niceDateTime(F) : '') +
       '<br>Float: ' + U.hoursToText(x.floatMinutes / 60) + (mode === 'jit' ? ' · earliest start ' + U.niceDateTime(x.ES) : ' · latest start ' + U.niceDateTime(x.LS)) +
       ((s.components || []).length ? '<br>Uses: ' + s.components.map(c => (pb[c.partId] ? pb[c.partId].itemNr : '?') + '×' + U.round(c.qty * x.units, 2)).join(', ') : '') +
-      (s.notes ? '<br><i>' + UI.esc(s.notes) + '</i>' : '');
+      (s.notes ? '<br><i>' + UI.esc(s.notes) + '</i>' : '') + '<br><span style="color:#94a3b8">click = highlight · double-click = edit step</span>';
   };
 
   PlanUI.drawGantt = function (res, mode) {
@@ -352,6 +352,7 @@
       g.addEventListener('mousemove', e => UI.moveTip(e.clientX, e.clientY));
       g.addEventListener('mouseleave', UI.hideTip);
       g.addEventListener('click', () => PlanUI.select(g.dataset.id, res, mode));
+      g.addEventListener('dblclick', () => { UI.hideTip(); root.App.editStep(res.recipe.id, g.dataset.id); });
     });
     wrap.querySelectorAll('g.bar').forEach(g => {
       const x = res.rows[g.dataset.id];
@@ -359,6 +360,7 @@
       g.addEventListener('mousemove', e => UI.moveTip(e.clientX, e.clientY));
       g.addEventListener('mouseleave', UI.hideTip);
       g.addEventListener('click', () => PlanUI.select(g.dataset.id, res, mode));
+      g.addEventListener('dblclick', () => { UI.hideTip(); root.App.editStep(res.recipe.id, g.dataset.id); });
     });
   };
 
@@ -433,6 +435,7 @@
       g.addEventListener('mousemove', e => UI.moveTip(e.clientX, e.clientY));
       g.addEventListener('mouseleave', UI.hideTip);
       g.addEventListener('click', () => PlanUI.select(g.dataset.id, res, mode));
+      g.addEventListener('dblclick', () => { UI.hideTip(); root.App.editStep(res.recipe.id, g.dataset.id); });
     });
     // keep both charts scrolled together
     const b = wrap.querySelector('.gantt-scroll');
@@ -486,6 +489,7 @@
       g.addEventListener('mousemove', e => UI.moveTip(e.clientX, e.clientY));
       g.addEventListener('mouseleave', UI.hideTip);
       g.addEventListener('click', () => PlanUI.select(g.dataset.id, res, mode));
+      g.addEventListener('dblclick', () => { UI.hideTip(); root.App.editStep(res.recipe.id, g.dataset.id); });
     });
   };
 
