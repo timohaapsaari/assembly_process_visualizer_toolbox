@@ -47,6 +47,9 @@ browser's localStorage and can be exported/imported as CSV or JSON. A first open
   - step schedule table with lots and waves, worker load per day with capacity warning
   - materials to purchase with need dates and order-by dates from lead times
   - CSV export of the schedule and the material list, print/PDF
+- **Step types** – editable list with colours (assembly, sub-assembly, bonding/curing, test,
+  inspection, packaging, other by default; add e.g. potting, calibration, leak test). Types drive
+  colours and the resource defaults, not the scheduling itself.
 - **Calendars** – shop calendar with one or more shifts per day, holidays (Finnish public
   holidays one click), plus named calendars (e.g. a two-shift test department) that worker pools
   and shop-hours equipment can follow. Curing on 24/7 equipment runs through nights and weekends

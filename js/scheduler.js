@@ -8,7 +8,7 @@
 
   const S = {};
 
-  S.STEP_TYPES = [
+  S.DEFAULT_STEP_TYPES = [
     { id: 'assembly',    label: 'Assembly',        color: '#2f6fed' },
     { id: 'subassembly', label: 'Sub-assembly',    color: '#4f9bff' },
     { id: 'bonding',     label: 'Bonding / curing', color: '#c46a1c' },
@@ -17,7 +17,14 @@
     { id: 'packaging',   label: 'Packaging',       color: '#64748b' },
     { id: 'other',       label: 'Other',           color: '#94a3b8' }
   ];
-  S.typeInfo = id => S.STEP_TYPES.find(t => t.id === id) || S.STEP_TYPES[S.STEP_TYPES.length - 1];
+  /** Active step types (editable by the user; defaults until Store sets them). */
+  S.STEP_TYPES = S.DEFAULT_STEP_TYPES.map(t => Object.assign({}, t));
+  S.setTypes = function (list) {
+    const clean = (list || []).filter(t => t && t.id).map(t => ({ id: String(t.id), label: t.label || t.id, color: t.color || '#94a3b8' }));
+    S.STEP_TYPES.length = 0; clean.forEach(t => S.STEP_TYPES.push(t));
+    if (!S.STEP_TYPES.length) S.DEFAULT_STEP_TYPES.forEach(t => S.STEP_TYPES.push(Object.assign({}, t)));
+  };
+  S.typeInfo = id => S.STEP_TYPES.find(t => t.id === id) || S.STEP_TYPES.find(t => t.id === 'other') || { id: id || 'other', label: id || 'Other', color: '#94a3b8' };
 
   /** Duration of the work portion of a step in working minutes for the given number of units. */
   S.stepWorkMinutes = function (step, units, resource) {

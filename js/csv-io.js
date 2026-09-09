@@ -104,16 +104,21 @@
   }
   function normStepType(v) {
     v = String(v || '').trim().toLowerCase();
-    if (!v) return 'assembly';
-    const t = Scheduler.STEP_TYPES.find(t => t.id === v || t.label.toLowerCase() === v);
+    const fallback = Scheduler.STEP_TYPES.some(t => t.id === 'assembly') ? 'assembly' : Scheduler.STEP_TYPES[0].id;
+    if (!v) return fallback;
+    const vv = v.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const t = Scheduler.STEP_TYPES.find(t => t.id === v || t.id === vv || t.label.toLowerCase() === v);
     if (t) return t.id;
-    if (/test|koe|testaus|burn/.test(v)) return 'test';
-    if (/bond|glue|cure|cur|adhes|pot|paint|dry|liim|kovet|maal/.test(v)) return 'bonding';
-    if (/insp|check|qc|quality|tark/.test(v)) return 'inspection';
-    if (/pack|ship|pakk/.test(v)) return 'packaging';
-    if (/sub|osakok/.test(v)) return 'subassembly';
-    if (/assem|kokoon|asenn/.test(v)) return 'assembly';
-    return 'other';
+    const has = id => Scheduler.STEP_TYPES.some(t => t.id === id);
+    let h = null;
+    if (/test|koe|testaus|burn/.test(v)) h = 'test';
+    else if (/bond|glue|cure|cur|adhes|pot|paint|dry|liim|kovet|maal/.test(v)) h = 'bonding';
+    else if (/insp|check|qc|quality|tark/.test(v)) h = 'inspection';
+    else if (/pack|ship|pakk/.test(v)) h = 'packaging';
+    else if (/sub|osakok/.test(v)) h = 'subassembly';
+    else if (/assem|kokoon|asenn/.test(v)) h = 'assembly';
+    if (h && has(h)) return h;
+    return has('other') ? 'other' : Scheduler.STEP_TYPES[0].id;
   }
   CSV.normType = normType; CSV.normStepType = normStepType;
 

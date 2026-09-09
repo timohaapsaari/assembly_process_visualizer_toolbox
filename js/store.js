@@ -1,7 +1,7 @@
 /* Application state, persistence (localStorage), demo data. */
 (function (root) {
   'use strict';
-  const U = root.U, Calendar = root.Calendar;
+  const U = root.U, Calendar = root.Calendar, Scheduler = root.Scheduler;
   const KEY = 'apv.state.v1';
   const SNAP_KEY = 'apv.snapshots.v1';
   const SNAP_MAX = 6;
@@ -16,6 +16,7 @@
         parts: [],
         resources: [],
         calendars: [],
+        stepTypes: Scheduler.DEFAULT_STEP_TYPES.map(t => Object.assign({}, t)),
         recipes: [],
         plans: [],
         settings: Object.assign({}, Calendar.DEFAULTS, { holidays: [], defaultsByType: {}, stdResourcesSeeded: true }),
@@ -39,6 +40,8 @@
       const st = this.state;
       if (!Array.isArray(st.resources)) st.resources = [];
       if (!Array.isArray(st.calendars)) st.calendars = [];
+      if (!Array.isArray(st.stepTypes) || !st.stepTypes.length) st.stepTypes = Scheduler.DEFAULT_STEP_TYPES.map(t => Object.assign({}, t));
+      Scheduler.setTypes(st.stepTypes);
       if (!Array.isArray(st.settings.shifts) || !st.settings.shifts.length) st.settings.shifts = [Calendar.legacyShift(st.settings)];
       st.resources.forEach(r => { if (r.calendarId === undefined) r.calendarId = null; });
       if (!st.settings.defaultsByType || typeof st.settings.defaultsByType !== 'object') st.settings.defaultsByType = {};
@@ -60,6 +63,25 @@
       }));
     },
 
+    /* ---- step types ---- */
+    typeIdFor(label) {
+      let base = String(label || 'type').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'type';
+      let id = base, n = 2; while (this.state.stepTypes.some(t => t.id === id)) id = base + '_' + (n++);
+      return id;
+    },
+    addStepType(label, color) { const t = { id: this.typeIdFor(label), label: label || 'New type', color: color || '#64748b' }; this.state.stepTypes.push(t); Scheduler.setTypes(this.state.stepTypes); return t; },
+    stepTypeUsage(id) { let n = 0; this.state.recipes.forEach(r => r.steps.forEach(s => { if (s.type === id) n++; })); return n; },
+    deleteStepType(id, replacementId) {
+      if (this.state.stepTypes.length <= 1) return false;
+      this.state.stepTypes = this.state.stepTypes.filter(t => t.id !== id);
+      const rep = replacementId && this.state.stepTypes.some(t => t.id === replacementId) ? replacementId : (this.state.stepTypes.find(t => t.id === 'other') || this.state.stepTypes[0]).id;
+      this.state.recipes.forEach(r => r.steps.forEach(s => { if (s.type === id) s.type = rep; }));
+      const d = this.state.settings.defaultsByType || {}; delete d[id];
+      Scheduler.setTypes(this.state.stepTypes);
+      return true;
+    },
+    moveStepType(id, dir) { const l = this.state.stepTypes; const i = l.findIndex(t => t.id === id); const j = i + dir; if (i < 0 || j < 0 || j >= l.length) return; const x = l[i]; l[i] = l[j]; l[j] = x; Scheduler.setTypes(l); },
+
     save() {
       try { localStorage.setItem(KEY, JSON.stringify(this.state)); } catch (e) { console.warn('save failed', e); }
       this.listeners.forEach(fn => fn(this.state));
@@ -73,7 +95,7 @@
       try {
         const st = this.state;
         if (!st.parts.length && !st.recipes.length && !st.resources.length) return false;
-        const json = JSON.stringify({ parts: st.parts, resources: st.resources, calendars: st.calendars, recipes: st.recipes, plans: st.plans, settings: st.settings });
+        const json = JSON.stringify({ parts: st.parts, resources: st.resources, calendars: st.calendars, stepTypes: st.stepTypes, recipes: st.recipes, plans: st.plans, settings: st.settings });
         if (json.length > 3000000) return false;
         const list = this.snapshots();
         list.unshift({ t: new Date().toISOString(), label: label || 'snapshot', parts: st.parts.length, recipes: st.recipes.length, plans: st.plans.length, json });
@@ -86,7 +108,7 @@
       const snap = this.snapshots()[index]; if (!snap) throw new Error('Snapshot not found');
       this.snapshot('before restoring "' + snap.label + '"');
       const obj = JSON.parse(snap.json);
-      this.state = Object.assign(this.blank(), { parts: obj.parts || [], resources: obj.resources || [], calendars: obj.calendars || [], recipes: obj.recipes || [], plans: obj.plans || [], settings: Object.assign({}, Calendar.DEFAULTS, obj.settings || {}) });
+      this.state = Object.assign(this.blank(), { parts: obj.parts || [], resources: obj.resources || [], calendars: obj.calendars || [], stepTypes: obj.stepTypes || undefined, recipes: obj.recipes || [], plans: obj.plans || [], settings: Object.assign({}, Calendar.DEFAULTS, obj.settings || {}) });
       this.migrate();
     },
     deleteSnapshot(index) { const l = this.snapshots(); l.splice(index, 1); localStorage.setItem(SNAP_KEY, JSON.stringify(l)); },
@@ -229,12 +251,13 @@
     },
 
     /* ---- backup ---- */
-    exportJSON() { return JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), parts: this.state.parts, resources: this.state.resources, calendars: this.state.calendars, recipes: this.state.recipes, plans: this.state.plans, settings: this.state.settings }, null, 2); },
+    exportJSON() { return JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), parts: this.state.parts, resources: this.state.resources, calendars: this.state.calendars, stepTypes: this.state.stepTypes, recipes: this.state.recipes, plans: this.state.plans, settings: this.state.settings }, null, 2); },
     importJSON(obj, mode) {
       if (!obj || !Array.isArray(obj.parts)) throw new Error('Not a valid backup file (missing parts array).');
       this.snapshot(mode === 'replace' ? 'before restoring a backup (replace)' : 'before merging a backup');
       if (mode === 'replace') {
         this.state.parts = obj.parts || []; this.state.resources = obj.resources || []; this.state.calendars = obj.calendars || []; this.state.recipes = obj.recipes || []; this.state.plans = obj.plans || [];
+        if (Array.isArray(obj.stepTypes) && obj.stepTypes.length) this.state.stepTypes = obj.stepTypes;
         if (obj.settings) this.state.settings = Object.assign({}, Calendar.DEFAULTS, obj.settings);
       } else {
         const byNr = {}; this.state.parts.forEach(p => { byNr[String(p.itemNr).toLowerCase()] = p; });
@@ -244,6 +267,7 @@
           if (ex) { Object.assign(ex, p, { id: ex.id }); idMap[p.id] = ex.id; }
           else { this.state.parts.push(p); idMap[p.id] = p.id; }
         });
+        (obj.stepTypes || []).forEach(t => { if (t && t.id && !this.state.stepTypes.some(x => x.id === t.id)) this.state.stepTypes.push({ id: t.id, label: t.label || t.id, color: t.color || '#64748b' }); });
         const calMap = {};
         (obj.calendars || []).forEach(x => {
           const ex = this.calendarByName(x.name);
@@ -271,8 +295,10 @@
     clearAll() {
       this.snapshot('before clear all data');
       const keep = Object.assign({}, this.state.settings, { defaultsByType: {}, stdResourcesSeeded: true });
+      const types = this.state.stepTypes;
       this.state = this.blank();
       this.state.settings = keep;
+      if (types && types.length) { this.state.stepTypes = types; Scheduler.setTypes(types); }
     },
     /** Does the workspace still contain demo objects? */
     hasDemoData() {

@@ -20,6 +20,9 @@
       '<div class="panel"><div class="panel-head"><h2>Named calendars</h2><span class="spacer"></span><button class="btn btn-sm btn-primary" id="c-add">+ Calendar</button></div>' +
       '<p class="muted small">Additional shift patterns for worker pools and shop-hours equipment, e.g. "Two shifts" or "Weekend crew". Holidays apply to all calendars. Assign them on the Resources tab.</p>' +
       '<div id="c-list"></div></div>' +
+      '<div class="panel"><div class="panel-head"><h2>Step types</h2><span class="spacer"></span><button class="btn btn-sm btn-primary" id="t-add">+ Step type</button></div>' +
+      '<p class="muted small">Categories for recipe steps: colour in the Gantt and network, and the row in "Defaults by step type" on the Resources tab. The type does not change scheduling; times, resources, yield and parts do.</p>' +
+      '<div id="t-list"></div></div>' +
       '<div class="panel"><div class="panel-head"><h2>Holidays / non-working days</h2></div>' +
       '<p class="muted small">One date per line (YYYY-MM-DD). Also accepts 24.12.2026.</p>' +
       '<textarea id="s-hol" style="min-height:180px" class="mono">' + UI.esc((s.holidays || []).join('\n')) + '</textarea>' +
@@ -39,6 +42,14 @@
     if (!Array.isArray(s.shifts) || !s.shifts.length) s.shifts = [Calendar.legacyShift(s)];
     SettingsUI.shiftEditor(panel.querySelector('#s-shifts'), s.shifts, () => { syncLegacy(); Store.save(); summary(); }, true);
     SettingsUI.renderCalendars(panel.querySelector('#c-list'));
+    SettingsUI.renderStepTypes(panel.querySelector('#t-list'));
+    panel.querySelector('#t-add').addEventListener('click', () => {
+      const box = UI.modal('<h2>New step type</h2><div class="form-row"><label class="f grow"><span>Name</span><input type="text" id="nt-name" style="width:100%" placeholder="e.g. Potting, Calibration, Leak test"></label><label class="f"><span>Colour</span><input type="color" id="nt-color" value="#0ea5e9"></label></div><div class="modal-actions"><button class="btn" data-close>Cancel</button><button class="btn btn-primary" id="nt-ok">Add</button></div>');
+      const ok = () => { const name = box.querySelector('#nt-name').value.trim(); if (!name) { UI.toast('Name is required', 'err'); return; } Store.addStepType(name, box.querySelector('#nt-color').value); Store.save(); UI.closeModal(); SettingsUI.renderStepTypes(panel.querySelector('#t-list')); };
+      box.querySelector('#nt-ok').addEventListener('click', ok);
+      box.querySelector('#nt-name').addEventListener('keydown', e => { if (e.key === 'Enter') ok(); });
+      box.querySelector('#nt-name').focus();
+    });
     panel.querySelector('#c-add').addEventListener('click', () => { Store.addCalendar({ name: 'Calendar ' + (Store.state.calendars.length + 1) }); Store.save(); SettingsUI.renderCalendars(panel.querySelector('#c-list')); });
     UI.bind(panel.querySelector('#s-cure'), s, 'cureUsesCalendar');
     UI.bind(panel.querySelector('#s-max'), s, 'maxWorkers', 'int');
@@ -115,6 +126,30 @@
       sum();
       host.appendChild(box);
     });
+  };
+
+  SettingsUI.renderStepTypes = function (host) {
+    host.innerHTML = '';
+    const list = Store.state.stepTypes;
+    const tbl = UI.el('<table class="tbl"><thead><tr><th></th><th>Name</th><th>Colour</th><th>Id (CSV value)</th><th class="num">Steps</th><th></th></tr></thead><tbody></tbody></table>');
+    const tb = tbl.querySelector('tbody');
+    list.forEach((t, i) => {
+      const used = Store.stepTypeUsage(t.id);
+      const tr = UI.el('<tr><td class="nowrap"><button class="btn btn-icon" data-mv="-1" title="Move up" ' + (i === 0 ? 'disabled' : '') + '>↑</button> <button class="btn btn-icon" data-mv="1" title="Move down" ' + (i === list.length - 1 ? 'disabled' : '') + '>↓</button></td>' +
+        '<td><span class="badge type prev" style="background:' + UI.esc(t.color) + '">' + UI.esc(t.label) + '</span> <input type="text" class="lbl w-l" value="' + UI.esc(t.label) + '"></td>' +
+        '<td><input type="color" class="col" value="' + UI.esc(t.color) + '"></td><td class="mono muted">' + UI.esc(t.id) + '</td><td class="num">' + used + '</td>' +
+        '<td><button class="btn btn-icon btn-danger" title="Delete type" ' + (list.length <= 1 ? 'disabled' : '') + '>✕</button></td></tr>');
+      tr.querySelector('.lbl').addEventListener('input', e => { t.label = e.target.value; tr.querySelector('.prev').textContent = t.label; root.Scheduler.setTypes(list); Store.save(); });
+      tr.querySelector('.col').addEventListener('input', e => { t.color = e.target.value; tr.querySelector('.prev').style.background = t.color; root.Scheduler.setTypes(list); Store.save(); });
+      tr.querySelectorAll('[data-mv]').forEach(b => b.addEventListener('click', () => { Store.moveStepType(t.id, +b.dataset.mv); Store.save(); SettingsUI.renderStepTypes(host); }));
+      tr.querySelector('.btn-danger').addEventListener('click', async () => {
+        const others = list.filter(x => x.id !== t.id);
+        const box = UI.modal('<h2>Delete step type "' + UI.esc(t.label) + '"</h2><p>' + (used ? used + ' step(s) use this type. They will be changed to:' : 'No steps use this type.') + '</p>' + (used ? '<select id="dt-rep">' + others.map(x => '<option value="' + x.id + '"' + (x.id === 'other' ? ' selected' : '') + '>' + UI.esc(x.label) + '</option>').join('') + '</select>' : '') + '<div class="modal-actions"><button class="btn" data-close>Cancel</button><button class="btn btn-danger" id="dt-ok">Delete</button></div>');
+        box.querySelector('#dt-ok').addEventListener('click', () => { const sel = box.querySelector('#dt-rep'); Store.deleteStepType(t.id, sel ? sel.value : null); Store.save(); UI.closeModal(); SettingsUI.renderStepTypes(host); });
+      });
+      tb.appendChild(tr);
+    });
+    host.appendChild(tbl);
   };
 
   root.SettingsUI = SettingsUI;
