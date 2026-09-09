@@ -1,0 +1,8 @@
+recipe;step_nr;component_item_nr;qty
+HA-200 hydraulic actuator;10;P-1002;1
+HA-200 hydraulic actuator;10;P-1003;1
+HA-200 hydraulic actuator;10;P-1020;0,05
+HA-200 hydraulic actuator;40;P-1001;1
+HA-200 hydraulic actuator;40;S-3001;1
+HA-200 hydraulic actuator;40;P-1010;1
+HA-200 hydraulic actuator;40;P-1030;2
