@@ -58,7 +58,7 @@
       if (await UI.confirm('Replace ALL current data with the demo (parts, resources, calendars, recipe, plan)? Export a backup first if you want to keep your data.', 'Replace with demo')) { Store.clearAll(); Store.loadDemo(); Store.save(); UI.toast('Demo data loaded', 'ok'); root.App.showTab('plan'); }
     });
     panel.querySelector('#s-clear').addEventListener('click', async () => {
-      if (await UI.confirm('Delete ALL parts, recipes and plans from this browser? Export a backup first if needed.', 'Delete everything')) { Store.clearAll(); Store.save(); UI.toast('All data cleared'); root.App.showTab('plan'); }
+      if (await UI.confirm('Delete ALL parts, resources, calendars, recipes and plans from this browser? The shop calendar and holidays are kept. Export a backup first if needed.', 'Delete everything')) { Store.clearAll(); Store.save(); UI.toast('Workspace cleared. Start with Resources and Parts.', 'ok', 5000); root.App.showTab('resources'); }
     });
     summary();
   };

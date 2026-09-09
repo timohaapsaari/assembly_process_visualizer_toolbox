@@ -16,7 +16,7 @@
         calendars: [],
         recipes: [],
         plans: [],
-        settings: Object.assign({}, Calendar.DEFAULTS, { holidays: [], defaultsByType: {} }),
+        settings: Object.assign({}, Calendar.DEFAULTS, { holidays: [], defaultsByType: {}, stdResourcesSeeded: true }),
         ui: { tab: 'plan', recipeId: null, planId: null, ganttMode: 'jit', zoom: 1 }
       };
     },
@@ -26,7 +26,7 @@
         const raw = localStorage.getItem(KEY);
         if (raw) { this.state = Object.assign(this.blank(), JSON.parse(raw)); }
       } catch (e) { console.warn('state load failed', e); }
-      if (!this.state) { this.state = this.blank(); this.loadDemo(); }
+      if (!this.state) { this.state = this.blank(); this.state.firstRun = true; }
       this.state.settings = Object.assign({}, Calendar.DEFAULTS, this.state.settings || {});
       this.migrate();
       return this.state;
@@ -239,7 +239,12 @@
       this.migrate();
     },
 
-    clearAll() { this.state = this.blank(); },
+    /** Empty workspace. Keeps the shop calendar and holidays; everything else is removed. */
+    clearAll() {
+      const keep = Object.assign({}, this.state.settings, { defaultsByType: {}, stdResourcesSeeded: true });
+      this.state = this.blank();
+      this.state.settings = keep;
+    },
     /** Resources usable as process equipment / worker pools. */
     equipment() { return (this.state.resources || []).filter(r => r.type !== 'labor'); },
     laborPools() { return (this.state.resources || []).filter(r => r.type === 'labor'); },

@@ -14,6 +14,16 @@
     window.scrollTo(0, 0);
   };
 
+  /** First open in this browser: choose demo or empty workspace. */
+  App.firstRun = function () {
+    App.showTab('plan');
+    const box = UI.modal('<h2>Welcome</h2><p>No data in this browser yet. How do you want to start?</p>' +
+      '<div class="grid-2 mt"><div class="panel" style="margin:0"><h3>Explore the demo</h3><p class="muted small">A hydraulic actuator with sub-assemblies, curing chambers, test chambers, worker pools, yields and a plan. Good for seeing how everything fits together. You can clear it later.</p><button class="btn btn-primary" id="fr-demo">Load demo data</button></div>' +
+      '<div class="panel" style="margin:0"><h3>Start empty</h3><p class="muted small">Build your own product: set the calendar, import or enter parts and resources, then build the recipe. The help (?) has a step-by-step flow for large structures.</p><button class="btn" id="fr-empty">Start with an empty workspace</button></div></div>');
+    box.querySelector('#fr-demo').addEventListener('click', () => { Store.clearAll(); Store.loadDemo(); Store.save(); UI.closeModal(); App.showTab('plan'); });
+    box.querySelector('#fr-empty').addEventListener('click', () => { Store.save(); UI.closeModal(); App.showTab('settings'); UI.toast('Empty workspace. Start with the calendar, then Resources and Parts.', 'ok', 5000); });
+  };
+
   App.help = function () {
     UI.modal('<h2>How to use</h2><div class="help">' +
       '<h3>1. Parts</h3><p>Define every item: purchased components (with supplier lead time) and manufactured sub-assemblies / products (with default work time per unit). Or import from your ERP as CSV.</p>' +
@@ -24,6 +34,13 @@
       '<h3>4. Plan</h3><p>Choose recipe, quantity and delivery date. Sub-assemblies with their own delivery dates can be added as extra due dates. All quantities are exploded through the steps and every step is scheduled <b>backwards</b> from the delivery date (latest start, just-in-time). A forward pass from the earliest start gives the float and the <b>critical path</b> (red). If the latest start is before today, the plan is not achievable as-is: the tool shows the earliest finish and what to change.</p>' +
       '<p>The Gantt shows work (coloured by step type) inside working hours, cure as hatched orange, non-working time grey. Hover for details, click to highlight. Materials table gives order-by dates from part lead times.</p>' +
       '<h3>5. Calendar</h3><p>Set shifts, breaks, working days and holidays. Add a max worker count to get capacity warnings.</p>' +
+      '<h3>Building a large structure</h3><ol style="margin:4px 0 8px 18px;padding:0">' +
+      '<li><b>Calendar &amp; resources first.</b> Shifts, holidays, then worker pools and equipment with capacity and lot sizes, and the defaults by step type.</li>' +
+      '<li><b>Parts from the ERP.</b> Import parts.csv with every purchased item and every sub-assembly item number. Lead times for purchased parts.</li>' +
+      '<li><b>Work top-down from the final product.</b> Create the final assembly step first: output = final item, components = its top-level sub-assemblies and purchased parts. Then, for every sub-assembly component, add the step(s) that produce it, and so on down the tree. Each new step consumes parts already named, so no sub-assembly is left unused.</li>' +
+      '<li><b>Tests and cures as their own steps.</b> A test on the same item: input = output = the item, with yield %. A cure: process time on a curing resource, tick "next step per lot".</li>' +
+      '<li><b>One branch at a time.</b> Finish a sub-assembly branch, check the summary (lead time, critical path, warnings), then move to the next. Large trees are easier in a spreadsheet: fill steps.csv / bom.csv and import.</li>' +
+      '<li><b>Renumber in process order</b> at the end (drag to order, then Renumber) and validate with a plan.</li></ol>' +
       '<h3>Data</h3><p>Everything is saved in this browser. Use Import / Export for CSV round-trips with your ERP and JSON backups.</p>' +
       '</div><div class="modal-actions"><button class="btn btn-primary" data-close>Close</button></div>');
   };
@@ -32,7 +49,8 @@
     Store.load();
     document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => App.showTab(b.dataset.tab)));
     document.getElementById('btnHelp').addEventListener('click', App.help);
-    App.showTab(Store.state.ui.tab || 'plan');
+    if (Store.state.firstRun) { delete Store.state.firstRun; App.firstRun(); }
+    else App.showTab(Store.state.ui.tab || 'plan');
     let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if (Store.state.ui.tab === 'plan' && root.PlanUI.result) root.PlanUI.renderResult(root.PlanUI.result); }, 200); });
   });
 

@@ -11,6 +11,7 @@ const SHOTS = process.env.SHOTS || require('os').tmpdir() + '/apv-shots/'; requi
   const url = 'file://' + path.resolve(__dirname, '../index.html');
   await page.goto(url);
   await page.waitForTimeout(500);
+  if (await page.$('#fr-demo')) { await page.click('#fr-demo'); await page.waitForTimeout(500); }
   await page.screenshot({ path: SHOTS + 'plan.png', fullPage: true });
   // KPI values
   console.log('KPIs:', await page.$$eval('.kpi', els => els.map(e => e.querySelector('.k').textContent + ': ' + e.querySelector('.v').textContent)));
