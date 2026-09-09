@@ -72,7 +72,7 @@
       s.chainNamedBy = src[i] ? src[i].nr : null;
       if (s.continuesPrevious) {
         const k = prevOf(i);
-        if (k < 0) { s.continuesPrevious = false; warnings.push({ level: 'warn', text: 'Step ' + s.nr + ' "' + s.name + '" is the first step and cannot continue a previous one.' }); }
+        if (k < 0) { s.continuesPrevious = false; s.isChainStart = true; } // first step: nothing to continue from
         else if (eff[k]) {
           s.chainInputPartId = eff[k]; s.chainPrevStepId = out[k].id;
           if (!s.components.some(c => c.partId === eff[k])) s.components.unshift({ partId: eff[k], qty: 1, implicit: true });

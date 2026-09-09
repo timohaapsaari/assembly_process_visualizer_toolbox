@@ -236,7 +236,7 @@
     /* ---- recipes ---- */
     newStep(o) {
       return Object.assign({ id: U.uid('s'), nr: 10, name: '', type: 'assembly', outputPartId: null, components: [],
-        workMinutes: 0, workers: 1, fixedMinutes: 0, processHours: 0, resourceId: null, lotSize: 0, workerPoolId: null, transferPerLot: false, yieldPct: 100, continuesPrevious: false, extraPreds: [], notes: '' }, o || {});
+        workMinutes: 0, workers: 1, fixedMinutes: 0, processHours: 0, resourceId: null, lotSize: 0, workerPoolId: null, transferPerLot: false, yieldPct: 100, continuesPrevious: true, extraPreds: [], notes: '' }, o || {});
     },
     newRecipe(o) { return Object.assign({ id: U.uid('r'), name: '', finalPartId: null, deliverables: [], steps: [], notes: '' }, o || {}); },
     /** Mark a part as delivered separately with a quantity per product (0 removes it). */
@@ -383,7 +383,7 @@
       void assemblers; void testers; void testChambers; void cureChambers;
 
       const r = this.addRecipe({ name: 'HA-200 hydraulic actuator', demo: true, finalPartId: actT, notes: 'Demo recipe. Resources come from the step-type defaults: bonding steps cure in the curing chambers, test steps run in the test chambers with test workers, everything else uses assembly workers.' });
-      const S = (o) => { const s = this.newStep(o); this.applyDefaults(s, false); r.steps.push(s); return s.id; };
+      const S = (o) => { const s = this.newStep(Object.assign({ continuesPrevious: false }, o)); this.applyDefaults(s, false); r.steps.push(s); return s.id; };
       const s10 = S({ nr: 10, name: 'Bond piston to rod', type: 'bonding', outputPartId: rodA, components: [{ partId: rod, qty: 1 }, { partId: pist, qty: 1 }, { partId: glue, qty: 0.05 }], workMinutes: 25, workers: 1, fixedMinutes: 5, processHours: 12, transferPerLot: true, notes: 'Adhesive cures 12 h in the curing chamber before handling.' });
       const s20 = S({ nr: 20, name: 'Pot sensor PCB with magnet & cable', type: 'bonding', outputPartId: sensA, components: [{ partId: pcb, qty: 1 }, { partId: magn, qty: 1 }, { partId: cable, qty: 1 }, { partId: potting, qty: 0.1 }], workMinutes: 20, workers: 1, fixedMinutes: 10, processHours: 24, transferPerLot: true, notes: 'Potting cures 24 h in the curing chamber.' });
       const s30 = S({ nr: 30, name: 'Sensor module electrical test', type: 'test', outputPartId: sensT, components: [{ partId: sensA, qty: 1 }], workMinutes: 3, workers: 1, fixedMinutes: 5, processHours: 0.5, transferPerLot: true, yieldPct: 95, notes: '3 min hook-up per module, then a 30 min automated test in the chamber. 5 % fail.' });

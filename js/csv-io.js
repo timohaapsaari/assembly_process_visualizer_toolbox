@@ -259,7 +259,7 @@
         }
         if (M.predecessors) o._preds = String(getVal(r, M, 'predecessors') || '').split(/[|;,\s]+/).map(x => x.trim()).filter(Boolean);
         if (s) { Object.assign(s, o); report.updated++; }
-        else { s = Store.newStep(Object.assign({ name: 'Step ' + nr }, o)); rc.steps.push(s); report.added++; }
+        else { s = Store.newStep(Object.assign({ name: 'Step ' + nr, continuesPrevious: false }, o)); rc.steps.push(s); report.added++; }
         if (M.continuesPrevious) s.continuesPrevious = /^(1|y|yes|true|x|k|kyllä|kylla)$/i.test(String(getVal(r, M, 'continuesPrevious') || '').trim());
         else if (!s.outputPartId && !(s.components || []).length && rc.steps.indexOf(s) > 0) s.continuesPrevious = true;
         if (M.deliverQty && s.outputPartId) Store.setDeliverable(rc, s.outputPartId, U.num(getVal(r, M, 'deliverQty'), 0));

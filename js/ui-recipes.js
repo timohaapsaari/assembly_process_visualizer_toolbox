@@ -77,8 +77,6 @@
     r.steps.forEach(s => list.appendChild(RecipesUI.stepCard(r, s)));
     const addStep = () => {
       const s = Store.newStep({ nr: Store.nextStepNr(r), name: '' });
-      // default: continue on the previous step's item
-      if (r.steps.length) s.continuesPrevious = true;
       Store.applyDefaults(s, false);
       r.steps.push(s); Store.save();
       const card = RecipesUI.stepCard(r, s); list.appendChild(card);
@@ -108,7 +106,8 @@
       '</div>' +
       '<div class="body">' +
       '<div>' +
-      '<label class="check" title="This step works on the item coming from the previous step (dispensing, curing, testing…). Leave Produces empty unless this step creates a new item or is the last step of the chain."><input type="checkbox" class="cont" ' + (s.continuesPrevious ? 'checked' : '') + '> continues from previous step</label>' +
+      (r.steps.indexOf(s) === 0 ? '<span class="badge" title="The first step has no previous step to continue from; it starts the chain from its components">start step</span>' :
+      '<label class="check" title="This step works on the item coming from the previous step (dispensing, curing, testing…). Leave Produces empty unless this step creates a new item or is the last step of the chain. Untick when this step starts a new branch from its own components."><input type="checkbox" class="cont" ' + (s.continuesPrevious ? 'checked' : '') + '> continues from previous step</label>') +
       '<label class="f mt"><span>Produces (output part)</span><span class="out"></span><span class="chain-info small muted"></span></label>' +
       '<label class="f mt"><span>Uses (components, qty per output unit)</span><div class="comps"></div><span class="addcomp"></span></label>' +
       '</div>' +
@@ -141,7 +140,7 @@
 
     const refresh = () => RecipesUI.refresh();
     const contI = card.querySelector('.cont');
-    contI.addEventListener('change', () => { s.continuesPrevious = contI.checked; Store.save(); renderComps(); refresh(); });
+    if (contI) contI.addEventListener('change', () => { s.continuesPrevious = contI.checked; Store.save(); renderComps(); refresh(); });
     const nrI = card.querySelector('.nr');
     nrI.addEventListener('change', () => { s.nr = U.num(nrI.value, s.nr); Store.save(); refresh(); });
     UI.bind(card.querySelector('.name'), s, 'name', 'text', refresh);
@@ -191,7 +190,7 @@
     const comps = card.querySelector('.comps');
     const renderComps = () => {
       comps.innerHTML = '';
-      if (s.continuesPrevious) {
+      if (s.continuesPrevious && r.steps.indexOf(s) > 0) {
         const rs = Scheduler.resolveRecipe(r).steps.find(x => x.id === s.id);
         const pin = rs && rs.chainInputPartId ? Store.partsById()[rs.chainInputPartId] : null;
         const prev = rs && rs.chainPrevStepId ? r.steps.find(x => x.id === rs.chainPrevStepId) : null;
@@ -204,7 +203,7 @@
         chip.querySelector('.x').addEventListener('click', () => { s.components.splice(i, 1); Store.save(); renderComps(); refresh(); });
         comps.appendChild(chip);
       });
-      if (!s.components.length && !s.continuesPrevious) comps.appendChild(UI.el('<span class="muted small">No components yet.</span>'));
+      if (!s.components.length && !(s.continuesPrevious && r.steps.indexOf(s) > 0)) comps.appendChild(UI.el('<span class="muted small">No components yet.</span>'));
     };
     renderComps();
     const addPick = UI.partPicker({ placeholder: '+ add component (type item nr or name)…', clearAfterPick: true, onPick: p => {
