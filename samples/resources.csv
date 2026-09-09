@@ -1,8 +1,5 @@
 name;type;capacity;lot_size;process_hours;calendar;notes
-Bonding fixtures;equipment;6;1;12;24/7;One rod per fixture, 12 h cure
-Potting rack;equipment;1;8;24;24/7;
-Sensor test rig;equipment;1;1;0,25;shop;
-Pressure test bench;equipment;1;1;0,5;shop;
-Burn-in cabinet;equipment;1;4;8;24/7;4 actuators per 8 h cycle
-Assemblers;labor;3;;;;
-Test technicians;labor;1;;;Two shifts (test dept.);
+Assembly workers;labor;4;;;shop;Day shift
+Test workers;labor;2;;;Two shifts (test dept.);Two shifts
+Test chambers;equipment;2;4;8;24/7;2 chambers, 4 actuators each
+Curing chambers;equipment;2;6;12;24/7;2 chambers, 6 fixtures each

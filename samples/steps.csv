@@ -1,9 +1,9 @@
 recipe;step_nr;step_name;step_type;output_item_nr;components;work_minutes;workers;worker_pool;fixed_minutes;process_hours;resource;lot_size;transfer_per_lot;yield_pct;predecessors;notes
-HA-200 hydraulic actuator;10;Bond piston to rod;bonding;S-3001;P-1002:1|P-1003:1|P-1020:0,05;25;1;Assemblers;5;12;Bonding fixtures;;yes;100;;Adhesive cure 12 h before handling
-HA-200 hydraulic actuator;20;Pot sensor PCB with magnet & cable;bonding;S-3002;P-2001:1|P-2002:1|P-2003:1|P-2004:0,1;20;1;Assemblers;10;24;Potting rack;;yes;100;;
-HA-200 hydraulic actuator;30;Sensor module electrical test;test;S-3003;S-3002:1;3;1;Test technicians;0;0,25;Sensor test rig;;yes;95;;
-HA-200 hydraulic actuator;40;Assemble cylinder;subassembly;S-3004;P-1001:1|S-3001:1|P-1010:1|P-1030:2;45;2;Assemblers;20;0;;4;yes;100;;
-HA-200 hydraulic actuator;50;Final assembly;assembly;F-4000;S-3004:1|S-3003:1|P-1040:1|P-9001:8|P-9002:0,5;60;2;Assemblers;30;0;;4;yes;100;;
-HA-200 hydraulic actuator;60;Pressure test 350 bar;test;F-4000;F-4000:1;10;1;Test technicians;0;0,5;Pressure test bench;;yes;92;;
-HA-200 hydraulic actuator;70;Burn-in cycling 8 h;test;F-4000;F-4000:1;5;1;Test technicians;10;8;Burn-in cabinet;;yes;100;60;4 pcs per 8 h cycle
-HA-200 hydraulic actuator;80;Final inspection & packaging;packaging;F-4001;F-4000:1|P-9010:1;15;1;Assemblers;0;0;;;no;100;70;
+HA-200 hydraulic actuator;10;Bond piston to rod;bonding;S-3001;P-1002:1|P-1003:1|P-1020:0,05;25;1;Assembly workers;5;12;Curing chambers;;yes;100;;Adhesive cure 12 h before handling
+HA-200 hydraulic actuator;20;Pot sensor PCB with magnet & cable;bonding;S-3002;P-2001:1|P-2002:1|P-2003:1|P-2004:0,1;20;1;Assembly workers;10;24;Curing chambers;;yes;100;;
+HA-200 hydraulic actuator;30;Sensor module electrical test;test;S-3003;S-3002:1;3;1;Test workers;0;0,25;Test chambers;;yes;95;;
+HA-200 hydraulic actuator;40;Assemble cylinder;subassembly;S-3004;P-1001:1|S-3001:1|P-1010:1|P-1030:2;45;2;Assembly workers;20;0;;4;yes;100;;
+HA-200 hydraulic actuator;50;Final assembly;assembly;F-4000;S-3004:1|S-3003:1|P-1040:1|P-9001:8|P-9002:0,5;60;2;Assembly workers;30;0;;4;yes;100;;
+HA-200 hydraulic actuator;60;Pressure test 350 bar;test;F-4000;F-4000:1;10;1;Test workers;0;0,5;Test chambers;;yes;92;;
+HA-200 hydraulic actuator;70;Burn-in cycling 8 h;test;F-4000;F-4000:1;5;1;Test workers;10;8;Test chambers;;yes;100;60;4 pcs per 8 h cycle
+HA-200 hydraulic actuator;80;Final inspection & packaging;packaging;F-4001;F-4000:1|P-9010:1;15;1;Assembly workers;0;0;;;no;100;70;

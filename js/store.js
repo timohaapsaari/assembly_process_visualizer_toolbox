@@ -16,7 +16,7 @@
         calendars: [],
         recipes: [],
         plans: [],
-        settings: Object.assign({}, Calendar.DEFAULTS, { holidays: [] }),
+        settings: Object.assign({}, Calendar.DEFAULTS, { holidays: [], defaultsByType: {} }),
         ui: { tab: 'plan', recipeId: null, planId: null, ganttMode: 'jit', zoom: 1 }
       };
     },
@@ -39,6 +39,7 @@
       if (!Array.isArray(st.calendars)) st.calendars = [];
       if (!Array.isArray(st.settings.shifts) || !st.settings.shifts.length) st.settings.shifts = [Calendar.legacyShift(st.settings)];
       st.resources.forEach(r => { if (r.calendarId === undefined) r.calendarId = null; });
+      if (!st.settings.defaultsByType || typeof st.settings.defaultsByType !== 'object') st.settings.defaultsByType = {};
       (st.recipes || []).forEach(r => (r.steps || []).forEach(s => {
         if (s.processHours == null) { s.processHours = U.num(s.cureHours, 0); }
         delete s.cureHours;
@@ -116,6 +117,33 @@
     deleteResource(resId) {
       this.state.resources = this.state.resources.filter(r => r.id !== resId);
       this.state.recipes.forEach(r => r.steps.forEach(s => { if (s.resourceId === resId) s.resourceId = null; if (s.workerPoolId === resId) s.workerPoolId = null; }));
+    },
+
+    /** Default worker pool / equipment for a step type: {poolId, resourceId}. */
+    defaultsFor(type) { const d = (this.state.settings.defaultsByType || {})[type] || {}; const rb = this.resourcesById(); return { poolId: rb[d.poolId] ? d.poolId : null, resourceId: rb[d.resourceId] ? d.resourceId : null }; },
+    /**
+     * Apply the step-type defaults to a step. overwrite=false only fills empty assignments.
+     * Returns true when something changed.
+     */
+    applyDefaults(step, overwrite) {
+      const d = this.defaultsFor(step.type); const rb = this.resourcesById();
+      let changed = false;
+      if (d.poolId && (overwrite || !step.workerPoolId)) { if (step.workerPoolId !== d.poolId) { step.workerPoolId = d.poolId; changed = true; } }
+      if (d.resourceId && (overwrite || !step.resourceId)) {
+        if (step.resourceId !== d.resourceId) {
+          step.resourceId = d.resourceId; changed = true;
+          const res = rb[d.resourceId];
+          if (res && !U.num(step.processHours) && U.num(res.processHours)) step.processHours = res.processHours;
+          if (res && U.num(res.lotSize) > 0 && !step.transferPerLot) step.transferPerLot = true;
+        }
+      }
+      return changed;
+    },
+    /** Apply defaults to every step of every recipe (or one recipe). Returns number of steps changed. */
+    applyDefaultsToAll(overwrite, recipeId) {
+      let n = 0;
+      this.state.recipes.forEach(r => { if (recipeId && r.id !== recipeId) return; r.steps.forEach(s => { if (this.applyDefaults(s, overwrite)) n++; }); });
+      return n;
     },
 
     /* ---- recipes ---- */
@@ -206,28 +234,31 @@
       const actT = P('F-4001', 'Hydraulic actuator HA-200, tested & packed', 'manufactured');
 
       const R = (o) => this.addResource(o).id;
-      const fixtures = R({ name: 'Bonding fixtures', type: 'equipment', capacity: 6, lotSize: 1, processHours: 12, calendar: '24_7', notes: 'One rod per fixture, 12 h cure at room temperature.' });
-      const rack = R({ name: 'Potting rack', type: 'equipment', capacity: 1, lotSize: 8, processHours: 24, calendar: '24_7' });
-      const testRig = R({ name: 'Sensor test rig', type: 'equipment', capacity: 1, lotSize: 1, processHours: 0.25, calendar: 'shop' });
-      const bench = R({ name: 'Pressure test bench', type: 'equipment', capacity: 1, lotSize: 1, processHours: 0.5, calendar: 'shop' });
-      const burnin = R({ name: 'Burn-in cabinet', type: 'equipment', capacity: 1, lotSize: 4, processHours: 8, calendar: '24_7', notes: '4 actuators per 8 h cycle.' });
       const twoShift = this.addCalendar({ name: 'Two shifts (test dept.)', shifts: [
         { days: [1, 2, 3, 4, 5], start: '07:00', end: '15:30', breakStart: '11:00', breakMinutes: 30 },
         { days: [1, 2, 3, 4], start: '15:30', end: '23:00', breakStart: '19:00', breakMinutes: 30 }
       ] }).id;
-      const assemblers = R({ name: 'Assemblers', type: 'labor', capacity: 3 });
-      const testers = R({ name: 'Test technicians', type: 'labor', capacity: 1, calendarId: twoShift });
+      const assemblers = R({ name: 'Assembly workers', type: 'labor', capacity: 4, lotSize: 0, notes: 'Day shift.' });
+      const testers = R({ name: 'Test workers', type: 'labor', capacity: 2, lotSize: 0, calendarId: twoShift, notes: 'Two shifts.' });
+      const testChambers = R({ name: 'Test chambers', type: 'equipment', capacity: 2, lotSize: 4, processHours: 8, calendar: '24_7', notes: '2 chambers, 4 actuators each; automated cycles run unattended.' });
+      const cureChambers = R({ name: 'Curing chambers', type: 'equipment', capacity: 2, lotSize: 6, processHours: 12, calendar: '24_7', notes: '2 chambers, 6 fixtures each; curing runs overnight.' });
+      st.settings.defaultsByType = {
+        assembly: { poolId: assemblers }, subassembly: { poolId: assemblers }, inspection: { poolId: assemblers }, packaging: { poolId: assemblers }, other: { poolId: assemblers },
+        bonding: { poolId: assemblers, resourceId: cureChambers },
+        test: { poolId: testers, resourceId: testChambers }
+      };
+      void assemblers; void testers; void testChambers; void cureChambers;
 
-      const r = this.addRecipe({ name: 'HA-200 hydraulic actuator', finalPartId: actT, notes: 'Demo recipe: bonding on 6 fixtures with 12 h cure, potting rack with 24 h cure, pressure test bench, burn-in cabinet 4 pcs per 8 h.' });
-      const S = (o) => { const s = this.newStep(o); r.steps.push(s); return s.id; };
-      const s10 = S({ nr: 10, name: 'Bond piston to rod', type: 'bonding', outputPartId: rodA, components: [{ partId: rod, qty: 1 }, { partId: pist, qty: 1 }, { partId: glue, qty: 0.05 }], workMinutes: 25, workers: 1, fixedMinutes: 5, processHours: 12, resourceId: fixtures, workerPoolId: assemblers, transferPerLot: true, notes: 'One rod per fixture; adhesive cures 12 h at room temperature before handling.' });
-      const s20 = S({ nr: 20, name: 'Pot sensor PCB with magnet & cable', type: 'bonding', outputPartId: sensA, components: [{ partId: pcb, qty: 1 }, { partId: magn, qty: 1 }, { partId: cable, qty: 1 }, { partId: potting, qty: 0.1 }], workMinutes: 20, workers: 1, fixedMinutes: 10, processHours: 24, resourceId: rack, workerPoolId: assemblers, transferPerLot: true, notes: 'Rack holds 8 modules per 24 h cure.' });
-      const s30 = S({ nr: 30, name: 'Sensor module electrical test', type: 'test', outputPartId: sensT, components: [{ partId: sensA, qty: 1 }], workMinutes: 3, workers: 1, fixedMinutes: 0, processHours: 0.25, resourceId: testRig, workerPoolId: testers, transferPerLot: true, yieldPct: 95, notes: '3 min hook-up per module, then 15 min automated test on the rig. 5 % fail.' });
-      const s40 = S({ nr: 40, name: 'Assemble cylinder (housing, rod sub-assy, seals, bearing)', type: 'subassembly', outputPartId: cylA, components: [{ partId: hous, qty: 1 }, { partId: rodA, qty: 1 }, { partId: seal, qty: 1 }, { partId: bear, qty: 2 }], workMinutes: 45, workers: 2, fixedMinutes: 20, processHours: 0, workerPoolId: assemblers, lotSize: 4, transferPerLot: true });
-      const s50 = S({ nr: 50, name: 'Final assembly (cylinder + sensor + end cap)', type: 'assembly', outputPartId: act, components: [{ partId: cylA, qty: 1 }, { partId: sensT, qty: 1 }, { partId: endcap, qty: 1 }, { partId: bolts, qty: 8 }, { partId: oil, qty: 0.5 }], workMinutes: 60, workers: 2, fixedMinutes: 30, processHours: 0, workerPoolId: assemblers, lotSize: 4, transferPerLot: true });
-      const s60 = S({ nr: 60, name: 'Pressure test 350 bar', type: 'test', outputPartId: act, components: [{ partId: act, qty: 1 }], workMinutes: 10, workers: 1, fixedMinutes: 0, processHours: 0.5, resourceId: bench, workerPoolId: testers, transferPerLot: true, yieldPct: 92, notes: '10 min mounting, 30 min automated pressure cycle per actuator. 8 % fail and are scrapped.' });
-      const s70 = S({ nr: 70, name: 'Burn-in cycling 8 h', type: 'test', outputPartId: act, components: [{ partId: act, qty: 1 }], workMinutes: 5, workers: 1, fixedMinutes: 10, processHours: 8, resourceId: burnin, workerPoolId: testers, transferPerLot: true, extraPreds: [s60], notes: 'Cabinet takes 4 actuators per unattended 8 h cycle.' });
-      const s80 = S({ nr: 80, name: 'Final inspection & packaging', type: 'packaging', outputPartId: actT, components: [{ partId: act, qty: 1 }, { partId: box, qty: 1 }], workMinutes: 15, workers: 1, fixedMinutes: 0, processHours: 0, workerPoolId: assemblers, extraPreds: [s70] });
+      const r = this.addRecipe({ name: 'HA-200 hydraulic actuator', finalPartId: actT, notes: 'Demo recipe. Resources come from the step-type defaults: bonding steps cure in the curing chambers, test steps run in the test chambers with test workers, everything else uses assembly workers.' });
+      const S = (o) => { const s = this.newStep(o); this.applyDefaults(s, false); r.steps.push(s); return s.id; };
+      const s10 = S({ nr: 10, name: 'Bond piston to rod', type: 'bonding', outputPartId: rodA, components: [{ partId: rod, qty: 1 }, { partId: pist, qty: 1 }, { partId: glue, qty: 0.05 }], workMinutes: 25, workers: 1, fixedMinutes: 5, processHours: 12, transferPerLot: true, notes: 'Adhesive cures 12 h in the curing chamber before handling.' });
+      const s20 = S({ nr: 20, name: 'Pot sensor PCB with magnet & cable', type: 'bonding', outputPartId: sensA, components: [{ partId: pcb, qty: 1 }, { partId: magn, qty: 1 }, { partId: cable, qty: 1 }, { partId: potting, qty: 0.1 }], workMinutes: 20, workers: 1, fixedMinutes: 10, processHours: 24, transferPerLot: true, notes: 'Potting cures 24 h in the curing chamber.' });
+      const s30 = S({ nr: 30, name: 'Sensor module electrical test', type: 'test', outputPartId: sensT, components: [{ partId: sensA, qty: 1 }], workMinutes: 3, workers: 1, fixedMinutes: 5, processHours: 0.5, transferPerLot: true, yieldPct: 95, notes: '3 min hook-up per module, then a 30 min automated test in the chamber. 5 % fail.' });
+      const s40 = S({ nr: 40, name: 'Assemble cylinder (housing, rod sub-assy, seals, bearing)', type: 'subassembly', outputPartId: cylA, components: [{ partId: hous, qty: 1 }, { partId: rodA, qty: 1 }, { partId: seal, qty: 1 }, { partId: bear, qty: 2 }], workMinutes: 45, workers: 2, fixedMinutes: 20, processHours: 0, lotSize: 4, transferPerLot: true });
+      const s50 = S({ nr: 50, name: 'Final assembly (cylinder + sensor + end cap)', type: 'assembly', outputPartId: act, components: [{ partId: cylA, qty: 1 }, { partId: sensT, qty: 1 }, { partId: endcap, qty: 1 }, { partId: bolts, qty: 8 }, { partId: oil, qty: 0.5 }], workMinutes: 60, workers: 2, fixedMinutes: 30, processHours: 0, lotSize: 4, transferPerLot: true });
+      const s60 = S({ nr: 60, name: 'Pressure test 350 bar', type: 'test', outputPartId: act, components: [{ partId: act, qty: 1 }], workMinutes: 10, workers: 1, fixedMinutes: 10, processHours: 1, transferPerLot: true, yieldPct: 92, notes: '10 min mounting per actuator, 1 h pressure cycle per chamber load. 8 % fail and are scrapped.' });
+      const s70 = S({ nr: 70, name: 'Burn-in cycling 8 h', type: 'test', outputPartId: act, components: [{ partId: act, qty: 1 }], workMinutes: 5, workers: 1, fixedMinutes: 10, processHours: 8, transferPerLot: true, extraPreds: [s60], notes: 'Chamber takes 4 actuators per unattended 8 h cycle.' });
+      const s80 = S({ nr: 80, name: 'Final inspection & packaging', type: 'packaging', outputPartId: actT, components: [{ partId: act, qty: 1 }, { partId: box, qty: 1 }], workMinutes: 15, workers: 1, fixedMinutes: 0, processHours: 0, extraPreds: [s70] });
       void s10; void s20; void s30; void s40; void s50; void s80;
 
       const plan = this.newPlan({ name: 'Order 4711 – 12 pcs HA-200', recipeId: r.id, qty: 12 });

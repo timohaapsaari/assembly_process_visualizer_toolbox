@@ -26,7 +26,7 @@
       '<div class="flex mt"><button class="btn btn-sm" id="s-fi">Add Finnish public holidays (this &amp; next year)</button></div>' +
       '<hr style="border:0;border-top:1px solid var(--border);margin:14px 0">' +
       '<div class="panel-head"><h3>Data</h3></div>' +
-      '<div class="flex"><button class="btn btn-sm" id="s-demo">Load demo data</button><button class="btn btn-sm btn-danger" id="s-clear">Clear all data</button></div>' +
+      '<div class="flex"><button class="btn btn-sm" id="s-demo">Replace with demo data</button><button class="btn btn-sm btn-danger" id="s-clear">Clear all data</button></div>' +
       '<p class="muted small mt">Data is stored in this browser (localStorage). Use Import / Export to back up as JSON or CSV.</p>' +
       '</div></div>');
     host.appendChild(panel);
@@ -55,7 +55,7 @@
       hol.value = s.holidays.join('\n'); Store.save(); summary();
     });
     panel.querySelector('#s-demo').addEventListener('click', async () => {
-      if (await UI.confirm('Add the demo parts, recipe and plan to your data?', 'Load demo')) { Store.loadDemo(); Store.save(); UI.toast('Demo data loaded', 'ok'); root.App.showTab('plan'); }
+      if (await UI.confirm('Replace ALL current data with the demo (parts, resources, calendars, recipe, plan)? Export a backup first if you want to keep your data.', 'Replace with demo')) { Store.clearAll(); Store.loadDemo(); Store.save(); UI.toast('Demo data loaded', 'ok'); root.App.showTab('plan'); }
     });
     panel.querySelector('#s-clear').addEventListener('click', async () => {
       if (await UI.confirm('Delete ALL parts, recipes and plans from this browser? Export a backup first if needed.', 'Delete everything')) { Store.clearAll(); Store.save(); UI.toast('All data cleared'); root.App.showTab('plan'); }

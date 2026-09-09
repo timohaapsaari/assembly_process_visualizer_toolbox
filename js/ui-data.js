@@ -120,6 +120,7 @@
         Store.save();
         let msg = 'Imported: ' + report.added + ' added, ' + report.updated + ' updated.';
         if (report.createdParts.length) msg += ' Created ' + report.createdParts.length + ' missing part(s): ' + report.createdParts.slice(0, 6).join(', ') + (report.createdParts.length > 6 ? '…' : '') + '.';
+        if (report.defaulted) msg += ' ' + report.defaulted + ' step(s) got their worker pool / equipment from the step-type defaults.';
         if (report.createdResources && report.createdResources.length) msg += ' Created resource(s): ' + report.createdResources.join(', ') + ' (check capacity and lot size on the Resources tab).';
         if (report.recipes.length) msg += ' New recipe(s): ' + report.recipes.join(', ') + '.';
         prev.innerHTML = '<div class="alert ok">' + UI.esc(msg) + '</div>' + (report.errors.length ? '<div class="alert warn"><ul>' + report.errors.slice(0, 20).map(e => '<li>' + UI.esc(e) + '</li>').join('') + '</ul></div>' : '') +

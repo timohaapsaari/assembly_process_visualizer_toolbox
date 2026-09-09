@@ -5,7 +5,9 @@ multi-level sub-assemblies, test phases, chemical curing / wait times, worker co
 backward scheduling from a delivery date.
 
 No build step, no server, no dependencies: open `index.html` in a browser. Data is kept in the
-browser's localStorage and can be exported/imported as CSV or JSON.
+browser's localStorage and can be exported/imported as CSV or JSON. A first open loads a demo
+(hydraulic actuator with assembly workers, test workers, test chambers and curing chambers);
+"Replace with demo data" under Calendar & settings restores it later.
 
 ## Features
 
@@ -14,7 +16,9 @@ browser's localStorage and can be exported/imported as CSV or JSON.
 - **Resources** – equipment (bonding fixtures, curing ovens, test chambers, burn-in cabinets) with
   capacity, lot size and own calendar (24/7, shop hours or a named shift calendar), and worker
   pools with headcount and their own shift calendar. Capacity × lot size limits how many pieces
-  can be in a process at once.
+  can be in a process at once. **Defaults by step type** (e.g. test steps → test workers + test
+  chambers, bonding → curing chambers) are applied to new and imported steps automatically and
+  to existing recipes with one click.
 - **Recipe builder** – build the assembly process as steps. Each step *produces* an output part
   and *uses* component parts with quantities; when a step uses the output of another step the
   dependency is derived automatically (sub-assemblies flow into later steps). Per step:

@@ -54,6 +54,25 @@
     });
     if (!list.length) tbody.appendChild(UI.el('<tr><td colspan="9" class="muted center">No resources yet. Add equipment such as test chambers, curing fixtures or ovens, and worker pools.</td></tr>'));
 
+    // defaults by step type
+    const d = Store.state.settings.defaultsByType || (Store.state.settings.defaultsByType = {});
+    const pools = Store.laborPools(), equip = Store.equipment();
+    const def = UI.el('<div class="panel"><div class="panel-head"><h3>Defaults by step type</h3><span class="muted small">new and imported steps get these automatically; existing steps via the buttons</span><span class="spacer"></span>' +
+      '<button class="btn btn-sm" id="def-fill">Fill empty assignments in all recipes</button><button class="btn btn-sm btn-danger" id="def-all">Overwrite all steps</button></div>' +
+      '<table class="tbl"><thead><tr><th>Step type</th><th>Worker pool</th><th>Process equipment</th></tr></thead><tbody>' +
+      root.Scheduler.STEP_TYPES.map(t => '<tr data-type="' + t.id + '"><td>' + UI.typeBadge(t.id) + '</td>' +
+        '<td><select class="dp"><option value="">— none —</option>' + pools.map(x => '<option value="' + x.id + '"' + ((d[t.id] || {}).poolId === x.id ? ' selected' : '') + '>' + UI.esc(x.name) + '</option>').join('') + '</select></td>' +
+        '<td><select class="dr"><option value="">— none —</option>' + equip.map(x => '<option value="' + x.id + '"' + ((d[t.id] || {}).resourceId === x.id ? ' selected' : '') + '>' + UI.esc(x.name) + '</option>').join('') + '</select></td></tr>').join('') +
+      '</tbody></table></div>');
+    def.querySelectorAll('tr[data-type]').forEach(tr => {
+      const t = tr.dataset.type;
+      tr.querySelector('.dp').addEventListener('change', e => { d[t] = d[t] || {}; d[t].poolId = e.target.value || null; Store.save(); });
+      tr.querySelector('.dr').addEventListener('change', e => { d[t] = d[t] || {}; d[t].resourceId = e.target.value || null; Store.save(); });
+    });
+    def.querySelector('#def-fill').addEventListener('click', () => { const n = Store.applyDefaultsToAll(false); Store.save(); UI.toast(n + ' step(s) assigned', 'ok'); ResourcesUI.render(); });
+    def.querySelector('#def-all').addEventListener('click', async () => { if (await UI.confirm('Overwrite the worker pool and equipment of every step in every recipe with these defaults?', 'Overwrite')) { const n = Store.applyDefaultsToAll(true); Store.save(); UI.toast(n + ' step(s) changed', 'ok'); ResourcesUI.render(); } });
+    host.appendChild(def);
+
     const add = (type) => {
       Store.addResource(type === 'labor' ? { name: 'New worker pool', type: 'labor', capacity: 2, lotSize: 0 } : { name: 'New equipment', type: 'equipment', capacity: 1, lotSize: 1, processHours: 1 });
       Store.save(); ResourcesUI.render();

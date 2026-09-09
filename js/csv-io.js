@@ -252,6 +252,7 @@
         if (M.predecessors) o._preds = String(getVal(r, M, 'predecessors') || '').split(/[|;,\s]+/).map(x => x.trim()).filter(Boolean);
         if (s) { Object.assign(s, o); report.updated++; }
         else { s = Store.newStep(Object.assign({ name: 'Step ' + nr }, o)); rc.steps.push(s); report.added++; }
+        if (Store.applyDefaults(s, false)) report.defaulted = (report.defaulted || 0) + 1;
       });
       // resolve predecessors by step nr, sort by nr
       st.recipes.forEach(rc => {

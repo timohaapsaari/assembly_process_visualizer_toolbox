@@ -67,7 +67,7 @@
     head.querySelector('#r-final').appendChild(fp);
 
     // steps
-    const body = UI.el('<div class="grid-2" style="grid-template-columns: 1.6fr 1fr"><div><div class="panel"><div class="panel-head"><h3>Steps</h3><span class="muted small">Drag ⋮⋮ to reorder. Dependencies are derived automatically from parts: a step that uses the output of another step comes after it.</span><span class="spacer"></span><button class="btn btn-sm" id="s-renum">Renumber</button><button class="btn btn-primary btn-sm" id="s-add">+ Add step</button></div><div class="step-list" id="steps"></div><div class="flex mt"><button class="btn" id="s-add2">+ Add step</button></div></div></div>' +
+    const body = UI.el('<div class="grid-2" style="grid-template-columns: 1.6fr 1fr"><div><div class="panel"><div class="panel-head"><h3>Steps</h3><span class="muted small">Drag ⋮⋮ to reorder. Dependencies are derived automatically from parts: a step that uses the output of another step comes after it.</span><span class="spacer"></span><button class="btn btn-sm" id="s-defaults" title="Fill empty worker pool / equipment fields from the step-type defaults (Resources tab)">Apply resource defaults</button><button class="btn btn-sm" id="s-renum">Renumber</button><button class="btn btn-primary btn-sm" id="s-add">+ Add step</button></div><div class="step-list" id="steps"></div><div class="flex mt"><button class="btn" id="s-add2">+ Add step</button></div></div></div>' +
       '<div><div class="panel" id="r-side"></div></div></div>');
     host.appendChild(body);
     const list = body.querySelector('#steps');
@@ -77,6 +77,7 @@
       // sensible default: consume previous step's output
       const prev = r.steps[r.steps.length - 1];
       if (prev && prev.outputPartId) s.components.push({ partId: prev.outputPartId, qty: 1 });
+      Store.applyDefaults(s, false);
       r.steps.push(s); Store.save();
       const card = RecipesUI.stepCard(r, s); list.appendChild(card);
       RecipesUI.refresh();
@@ -86,6 +87,7 @@
     body.querySelector('#s-add').addEventListener('click', addStep);
     body.querySelector('#s-add2').addEventListener('click', addStep);
     body.querySelector('#s-renum').addEventListener('click', () => { Store.renumberSteps(r); Store.save(); RecipesUI.render(); });
+    body.querySelector('#s-defaults').addEventListener('click', () => { const n = Store.applyDefaultsToAll(false, r.id); Store.save(); UI.toast(n ? n + ' step(s) assigned from defaults' : 'All steps already have assignments (or no defaults set on the Resources tab)', n ? 'ok' : ''); RecipesUI.render(); });
     RecipesUI.enableDrag(list, r);
     RecipesUI.refresh();
   };
@@ -131,7 +133,15 @@
     nrI.addEventListener('change', () => { s.nr = U.num(nrI.value, s.nr); Store.save(); refresh(); });
     UI.bind(card.querySelector('.name'), s, 'name', 'text', refresh);
     const typeSel = card.querySelector('select.type');
-    UI.bind(typeSel, s, 'type', 'text', v => { card.style.borderLeftColor = Scheduler.typeInfo(v).color; refresh(); });
+    UI.bind(typeSel, s, 'type', 'text', v => {
+      card.style.borderLeftColor = Scheduler.typeInfo(v).color;
+      if (Store.applyDefaults(s, false)) {
+        card.querySelector('.pool').value = s.workerPoolId || ''; card.querySelector('.res').value = s.resourceId || '';
+        card.querySelector('.cure').value = U.num(s.processHours); card.querySelector('.transfer').checked = !!s.transferPerLot;
+        Store.save();
+      }
+      refresh();
+    });
     UI.bind(card.querySelector('.work'), s, 'workMinutes', 'num', refresh);
     UI.bind(card.querySelector('.workers'), s, 'workers', 'int', v => { if (v < 1) { s.workers = 1; card.querySelector('.workers').value = 1; Store.save(); } refresh(); });
     UI.bind(card.querySelector('.fixed'), s, 'fixedMinutes', 'num', refresh);
