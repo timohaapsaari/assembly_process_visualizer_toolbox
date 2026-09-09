@@ -11,6 +11,7 @@
     const panel = UI.el('<div class="panel">' +
       '<div class="panel-head"><h2>Resources</h2><span class="badge">' + list.length + '</span><span class="spacer"></span>' +
       '<button class="btn" id="res-import">Import CSV…</button>' +
+      '<button class="btn" id="res-std" title="Create Assembly workers, Test workers, Test chambers and Curing chambers (if missing) and fill the step-type defaults">✨ Add standard groups</button>' +
       '<button class="btn" id="res-add-labor">+ Worker pool</button><button class="btn btn-primary" id="res-add">+ Equipment</button></div>' +
       '<p class="muted small"><b>Equipment</b> limits how many pieces can be in a process at once: capacity × lot size. Fixtures: capacity 6, lot 1. Oven or test chamber: capacity 1, lot 20. ' +
       'A step assigned to the equipment is scheduled lot by lot, each lot occupying one unit for the attended work plus the process time. Equipment on the <b>24/7</b> calendar keeps running over nights and weekends (curing, burn-in); shop equipment only runs during the shifts of its calendar. ' +
@@ -52,12 +53,13 @@
       });
       tbody.appendChild(tr);
     });
-    if (!list.length) tbody.appendChild(UI.el('<tr><td colspan="9" class="muted center">No resources yet. Add equipment such as test chambers, curing fixtures or ovens, and worker pools.</td></tr>'));
+    if (!list.length) tbody.appendChild(UI.el('<tr><td colspan="9" class="muted center">No resources yet. Click <b>Add standard groups</b> for assembly workers, test workers, test chambers and curing chambers, or add your own equipment and worker pools.</td></tr>'));
 
     // defaults by step type
     const d = Store.state.settings.defaultsByType || (Store.state.settings.defaultsByType = {});
     const pools = Store.laborPools(), equip = Store.equipment();
     const def = UI.el('<div class="panel"><div class="panel-head"><h3>Defaults by step type</h3><span class="muted small">new and imported steps get these automatically; existing steps via the buttons</span><span class="spacer"></span>' +
+      (!pools.length && !equip.length ? '<span class="badge warn">no resources to choose from yet — use "Add standard groups" above</span>' : '') +
       '<button class="btn btn-sm" id="def-fill">Fill empty assignments in all recipes</button><button class="btn btn-sm btn-danger" id="def-all">Overwrite all steps</button></div>' +
       '<table class="tbl"><thead><tr><th>Step type</th><th>Worker pool</th><th>Process equipment</th></tr></thead><tbody>' +
       root.Scheduler.STEP_TYPES.map(t => '<tr data-type="' + t.id + '"><td>' + UI.typeBadge(t.id) + '</td>' +
@@ -82,6 +84,13 @@
     panel.querySelector('#res-add').addEventListener('click', () => add('equipment'));
     panel.querySelector('#res-add-labor').addEventListener('click', () => add('labor'));
     panel.querySelector('#res-import').addEventListener('click', () => { root.App.showTab('data'); root.DataUI.preselect('resources'); });
+    panel.querySelector('#res-std').addEventListener('click', async () => {
+      const rep = Store.addStandardResources();
+      const n = Store.applyDefaultsToAll(false);
+      Store.save();
+      UI.toast((rep.created.length ? 'Created ' + rep.created.join(', ') + '. ' : 'Standard groups already exist. ') + (n ? n + ' step(s) assigned from the defaults.' : ''), 'ok', 6000);
+      ResourcesUI.render();
+    });
   };
 
   root.ResourcesUI = ResourcesUI;

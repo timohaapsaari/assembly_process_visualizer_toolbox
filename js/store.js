@@ -40,6 +40,13 @@
       if (!Array.isArray(st.settings.shifts) || !st.settings.shifts.length) st.settings.shifts = [Calendar.legacyShift(st.settings)];
       st.resources.forEach(r => { if (r.calendarId === undefined) r.calendarId = null; });
       if (!st.settings.defaultsByType || typeof st.settings.defaultsByType !== 'object') st.settings.defaultsByType = {};
+      // Existing data without any resources: seed the standard groups once so the resource views have something to show.
+      if (!st.resources.length && (st.recipes || []).length && !st.settings.stdResourcesSeeded) {
+        st.settings.stdResourcesSeeded = true;
+        this.addStandardResources();
+        this.applyDefaultsToAll(false);
+      }
+      if (st.resources.length) st.settings.stdResourcesSeeded = true;
       (st.recipes || []).forEach(r => (r.steps || []).forEach(s => {
         if (s.processHours == null) { s.processHours = U.num(s.cureHours, 0); }
         delete s.cureHours;
@@ -138,6 +145,35 @@
         }
       }
       return changed;
+    },
+    /**
+     * Create the standard resource groups (assembly workers, test workers, test chambers, curing chambers) if they do
+     * not exist yet, and fill empty step-type defaults with them. Returns {created: [names], defaultsSet: n}.
+     */
+    addStandardResources() {
+      const created = [];
+      const ensure = (name, o) => { let r = this.resourceByName(name); if (!r) { r = this.addResource(Object.assign({ name }, o)); created.push(name); } return r; };
+      const cal = this.calendar();
+      const twoShiftName = 'Two shifts (test dept.)';
+      let two = this.calendarByName(twoShiftName);
+      if (!two) {
+        const day = this.state.settings.shifts && this.state.settings.shifts[0] ? this.state.settings.shifts[0] : Calendar.legacyShift(this.state.settings);
+        two = this.addCalendar({ name: twoShiftName, shifts: [
+          { days: (day.days || [1, 2, 3, 4, 5]).slice(), start: day.start, end: day.end, breakStart: day.breakStart, breakMinutes: day.breakMinutes },
+          { days: [1, 2, 3, 4], start: day.end || cal.endHHMM(), end: '23:00', breakStart: '', breakMinutes: 0 }
+        ] });
+        created.push('calendar "' + twoShiftName + '"');
+      }
+      const asm = ensure('Assembly workers', { type: 'labor', capacity: 4, lotSize: 0, notes: 'Day shift.' });
+      const tst = ensure('Test workers', { type: 'labor', capacity: 2, lotSize: 0, calendarId: two.id, notes: 'Two shifts.' });
+      const tch = ensure('Test chambers', { type: 'equipment', capacity: 2, lotSize: 4, processHours: 8, calendar: '24_7', notes: '2 chambers, 4 pcs each; automated cycles run unattended.' });
+      const cch = ensure('Curing chambers', { type: 'equipment', capacity: 2, lotSize: 6, processHours: 12, calendar: '24_7', notes: '2 chambers, 6 fixtures each; curing runs overnight.' });
+      const d = this.state.settings.defaultsByType || (this.state.settings.defaultsByType = {});
+      const want = { assembly: { poolId: asm.id }, subassembly: { poolId: asm.id }, inspection: { poolId: asm.id }, packaging: { poolId: asm.id }, other: { poolId: asm.id },
+                     bonding: { poolId: asm.id, resourceId: cch.id }, test: { poolId: tst.id, resourceId: tch.id } };
+      let defaultsSet = 0;
+      Object.keys(want).forEach(t => { d[t] = d[t] || {}; if (!d[t].poolId && want[t].poolId) { d[t].poolId = want[t].poolId; defaultsSet++; } if (!d[t].resourceId && want[t].resourceId) { d[t].resourceId = want[t].resourceId; defaultsSet++; } });
+      return { created, defaultsSet };
     },
     /** Apply defaults to every step of every recipe (or one recipe). Returns number of steps changed. */
     applyDefaultsToAll(overwrite, recipeId) {
