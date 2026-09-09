@@ -73,12 +73,21 @@
       if (s.continuesPrevious) {
         const k = prevOf(i);
         if (k < 0) { s.continuesPrevious = false; s.isChainStart = true; } // first step: nothing to continue from
-        else if (eff[k]) {
-          s.chainInputPartId = eff[k]; s.chainPrevStepId = out[k].id;
-          if (!s.components.some(c => c.partId === eff[k])) s.components.unshift({ partId: eff[k], qty: 1, implicit: true });
+        else {
+          s.chainPrevStepId = out[k].id;
+          if (eff[k]) {
+            s.chainInputPartId = eff[k];
+            if (!s.components.some(c => c.partId === eff[k])) s.components.unshift({ partId: eff[k], qty: 1, implicit: true });
+          }
         }
       }
-      if (!eff[i]) warnings.push({ level: 'error', text: 'Step ' + s.nr + ' "' + s.name + '": no item. Set "Produces" on this step or on the last step of its chain.' });
+      if (!eff[i]) {
+        // find the end of this chain; the item has to be set there (or on this step if it starts something new)
+        let e = i, j = nextOf(i);
+        while (j >= 0 && out[j].continuesPrevious) { e = j; j = nextOf(j); }
+        s.chainEndNr = out[e].nr; s.chainEndId = out[e].id;
+        if (e === i) warnings.push({ level: 'error', text: 'Step ' + s.nr + ' "' + s.name + '"' + (s.continuesPrevious ? ' ends a chain that has no item yet: set "Produces" here.' : ': set "Produces" (the item this step creates).') });
+      }
     });
     return Object.assign({}, recipe, { steps: out, _resolved: true, resolveWarnings: warnings });
   };
