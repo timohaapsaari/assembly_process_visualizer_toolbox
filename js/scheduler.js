@@ -264,19 +264,26 @@
     while (changed) {
       changed = false;
       const produced = new Set(S.resolveRecipe({ id: recipe.id, steps }).steps.map(s => s.outputPartId).filter(Boolean));
-      // parts needed: step components plus items delivered separately
+      // parts needed: step components, items delivered separately, and items a step "produces" without any
+      // components (a placeholder for something another recipe builds)
       const needed = [];
       steps.forEach(s => (s.components || []).forEach(c => needed.push(c.partId)));
       (recipe.deliverables || []).forEach(d => needed.push(d.partId));
+      const placeholders = steps.filter(s => s.outputPartId && !(s.components || []).length && !s.continuesPrevious && !s._chainedIn);
+      placeholders.forEach(s => needed.push(s.outputPartId));
       for (const pid of needed) {
-        if (!pid || produced.has(pid)) continue;
+        const ph = placeholders.filter(s => s.outputPartId === pid);
+        if (!pid || (produced.has(pid) && !ph.length)) continue;
+        if (ph.length && (allRecipes || []).every(r => visited.has(r.id) || r.id === recipe.id || (r.finalPartId !== pid && !(!r.finalPartId && S.recipeFinalPart(r) === pid)))) continue;
         let sub = (allRecipes || []).find(r => !visited.has(r.id) && r.id !== recipe.id && r.finalPartId === pid);
         if (!sub) sub = (allRecipes || []).find(r => !visited.has(r.id) && r.id !== recipe.id && !r.finalPartId && S.recipeFinalPart(r) === pid);
         if (!sub) continue;
         visited.add(sub.id);
         const code = makeCode(sub.name);
-        subRecipes.push({ recipe: sub, code, partId: pid });
+        subRecipes.push({ recipe: sub, code, partId: pid, viaPlaceholder: ph.map(s => s.nr) });
         clone(sub, code).forEach(x => steps.push(x));
+        // the placeholder step becomes a follow-on operation on the sub-recipe's output (pass-through)
+        ph.forEach(s => { s.components = [{ partId: pid, qty: 1, implicit: true }]; s._chainedIn = sub.id; });
         produced.add(pid);
         changed = true;
         break;
@@ -295,6 +302,7 @@
     };
     steps.forEach(s => (s.components || []).forEach(c => consider(c.partId, 'component of step ' + s.nr)));
     (recipe.deliverables || []).forEach(d => consider(d.partId, 'delivered separately'));
+    steps.forEach(s => { if (s.outputPartId && !(s.components || []).length && !s.continuesPrevious && !s._chainedIn) { seen.delete(s.outputPartId); producedFinal.delete(s.outputPartId); consider(s.outputPartId, 'produced by step ' + s.nr + ' without components'); } });
     return Object.assign({}, recipe, { steps, subRecipes, expanded: subRecipes.length > 0, unresolved });
   };
 

@@ -420,4 +420,25 @@ t('chaining tolerates a sub-recipe without a selected final product and reports 
   assert.strictEqual(rx.unresolved[0].partId, 'zz');
   assert.strictEqual(rx.unresolved[0].makers.length, 0);
 });
+
+t('placeholder step producing an item without components chains the recipe that makes it', () => {
+  const partsC = Object.assign({}, parts, { sl: { id: 'sl', itemNr: 'SL-1', name: 'Sideloader', type: 'manufactured' } });
+  const rMain = { id: 'rm', name: 'Main', finalPartId: 'fin', deliverables: [{ partId: 'sl', qtyPerProduct: 6 }], steps: [
+    { id: 'm1', nr: 10, name: 'Final assembly', type: 'assembly', outputPartId: 'fin', components: [{ partId: 'hous', qty: 1 }], workMinutes: 60, workers: 1 },
+    { id: 'm2', nr: 20, name: 'Assembly side loaders', type: 'assembly', outputPartId: 'sl', components: [], workMinutes: 100, workers: 2 }] };
+  const rSL = { id: 'rsl', name: 'Sideloader', finalPartId: 'sl', steps: [
+    { id: 'a', nr: 10, name: 'Assembly', type: 'assembly', outputPartId: null, components: [{ partId: 'seal', qty: 3 }], workMinutes: 10, workers: 1 },
+    { id: 't', nr: 20, name: 'Testing', type: 'test', outputPartId: 'sl', components: [], continuesPrevious: true, workMinutes: 5, workers: 1, yieldPct: 90 }] };
+  const rx = S.expandRecipe(rMain, [rMain, rSL], partsC);
+  assert.strictEqual(rx.subRecipes.length, 1);
+  assert.deepStrictEqual(rx.subRecipes[0].viaPlaceholder, [20]);
+  const res = S.schedule({ recipe: rx, partsById: partsC, qty: 1, due: fri, planStart: mon, calendar: cal });
+  assert.strictEqual(res.rows.m2.units, 6);
+  assert.strictEqual(res.rows['rsl:t'].units, 7);      // 6 good out of 90 %
+  assert.strictEqual(res.rows['rsl:a'].units, 7);
+  assert.strictEqual(res.purchases.find(p => p.partId === 'seal').qty, 21);
+  assert.ok(res.rows.m2.ES >= res.rows['rsl:t'].EF - 60000);   // local step runs after the chained recipe
+  assert.ok(!res.warnings.length, JSON.stringify(res.warnings));
+  assert.strictEqual(rMain.steps[1].components.length, 0);      // original untouched
+});
 console.log('\n' + passed + ' tests passed' + (process.exitCode ? ', some FAILED' : ''));
