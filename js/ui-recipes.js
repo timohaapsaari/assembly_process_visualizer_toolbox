@@ -177,6 +177,11 @@
     const out = UI.partPicker({ value: s.outputPartId, placeholder: s.continuesPrevious ? 'leave empty to keep the chain item…' : 'Output part (item nr or name)…', onPick: p => {
       s.outputPartId = p.id;
       if (p.type !== 'manufactured') { p.type = 'manufactured'; }
+      if (!r.finalPartId && !r.steps.some(x => (x.components || []).some(c => c.partId === p.id))) {
+        r.finalPartId = p.id;
+        const fpInput = document.querySelector('#r-final input'); if (fpInput) { fpInput.value = p.itemNr + ' – ' + p.name; fpInput.dataset.partId = p.id; }
+        UI.toast('Final product set to ' + p.itemNr + ' (change it at the top if needed)', 'ok');
+      }
       if (!U.num(s.workMinutes) && U.num(p.workMinutes)) { s.workMinutes = p.workMinutes; card.querySelector('.work').value = p.workMinutes; }
       if (!s.name && p.name) { s.name = p.name; card.querySelector('.name').value = p.name; }
       Store.save(); refresh();
@@ -323,9 +328,10 @@
     });
 
     // validation
-    const warnings = g.warnings.concat(ex.warnings);
-    if (!r.finalPartId) warnings.unshift({ level: 'error', text: 'Select the final product part.' });
+    let warnings = g.warnings.concat(ex.warnings).filter(w => !/Recipe has no final product part selected/.test(w.text));
+    if (!r.finalPartId) warnings.unshift({ level: 'error', text: 'Select the final product part (top of the page). It is set automatically when you name the item on the last step.' });
     else if (!Object.values(g.byId).some(s => s.outputPartId === r.finalPartId)) warnings.unshift({ level: 'error', text: 'No step produces the final product.' });
+    const seen = new Set(); warnings = warnings.filter(w => { if (seen.has(w.text)) return false; seen.add(w.text); return true; });
     r.steps.forEach(s => { if (!s.name) warnings.push({ level: 'warn', text: 'Step ' + s.nr + ' has no name.' }); });
     const v = document.getElementById('r-validation');
     if (v) v.innerHTML = warnings.length ? '<div class="alert ' + (warnings.some(w => w.level === 'error') ? 'err' : 'warn') + '"><ul>' + warnings.map(w => '<li>' + UI.esc(w.text) + '</li>').join('') + '</ul></div>' : '<div class="alert ok">Recipe is consistent: ' + r.steps.length + ' steps, ' + Object.keys(g.producers).length + ' produced parts, ' + ex.purchases.length + ' purchased parts.</div>';
