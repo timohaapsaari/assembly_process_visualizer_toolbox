@@ -316,13 +316,17 @@
       else if (lt.lotSize) lotTxt = ' · lots of ' + lt.lotSize + ' pcs';
       const per10 = (() => { if (!res || !lt.lotSize) return ''; const lots = Math.ceil(10 / lt.lotSize), waves = Math.ceil(lots / res.capacity); return ' · 10 pcs = ' + lots + ' lot' + (lots > 1 ? 's' : '') + ' in ' + waves + ' wave' + (waves > 1 ? 's' : ''); })();
       const yTxt = Scheduler.yieldOf(s) < 1 ? ' · <b style="color:var(--danger)">yield ' + Math.round(Scheduler.yieldOf(s) * 100) + '%</b> → start ' + units + ' to get ' + (ex.good[s.id] || 1) : '';
-      card.querySelector('.summary').innerHTML = 'Per product: <b>' + U.minutesToText(wm) + '</b> attended work' + (U.num(s.workers, 1) > 1 ? ' with ' + s.workers + ' workers' : '') + ' (' + U.round(Scheduler.stepLaborHours(s, units, res), 2) + ' labor h)' + (U.num(s.processHours) ? ' + <b style="color:var(--cure)">' + U.hoursToText(U.num(s.processHours)) + ' process per lot</b>' : '') + (units !== 1 && Scheduler.yieldOf(s) >= 1 ? ' · ' + units + ' units per product' : '') + yTxt + lotTxt + per10;
+      if (isLink) { card.querySelector('.summary').innerHTML = '<span class="muted">Link step: no work of its own. Lead time and labor come from the linked recipe.</span>'; }
+      else card.querySelector('.summary').innerHTML = 'Per product: <b>' + U.minutesToText(wm) + '</b> attended work' + (U.num(s.workers, 1) > 1 ? ' with ' + s.workers + ' workers' : '') + ' (' + U.round(Scheduler.stepLaborHours(s, units, res), 2) + ' labor h)' + (U.num(s.processHours) ? ' + <b style="color:var(--cure)">' + U.hoursToText(U.num(s.processHours)) + ' process per lot</b>' : '') + (units !== 1 && Scheduler.yieldOf(s) >= 1 ? ' · ' + units + ' units per product' : '') + yTxt + lotTxt + per10;
       const outId = rs.outputPartId;
       const ciEl = card.querySelector('.chain-info');
+      const isLink = !!(s.outputPartId && !(s.components || []).length && !s.continuesPrevious && Store.state.recipes.find(x => x.id !== r.id && (x.finalPartId === s.outputPartId || (!x.finalPartId && Scheduler.recipeFinalPart(x) === s.outputPartId))));
       if (ciEl && s.outputPartId && !(s.components || []).length && !s.continuesPrevious) {
         const maker = Store.state.recipes.find(x => x.id !== r.id && (x.finalPartId === s.outputPartId || (!x.finalPartId && Scheduler.recipeFinalPart(x) === s.outputPartId)));
-        ciEl.innerHTML = maker ? '<span class="badge ok">sub-components from recipe "' + UI.esc(maker.name) + '"</span> <span class="muted">its steps are chained into plans; this step runs after them on the same item</span>' : '<span class="badge warn">no components and no recipe makes this item</span> <span class="muted">add components here, or create a recipe with this item as final product</span>';
+        ciEl.innerHTML = maker ? '<span class="badge ok">link to recipe "' + UI.esc(maker.name) + '"</span> <span class="muted">its steps, times and resources are used in plans; the time fields of this step are ignored</span>' : '<span class="badge warn">no components and no recipe makes this item</span> <span class="muted">add components here, or create a recipe with this item as final product</span>';
       }
+      card.classList.toggle('link-step', isLink);
+      ['.work', '.workers', '.pool', '.fixed', '.res', '.lot', '.cure', '.transfer', '.yield'].forEach(sel => { const el = card.querySelector(sel); if (el) el.disabled = isLink; });
       const deliv = (r.deliverables || []).find(d => d.partId === outId);
       const isFinal = outId === r.finalPartId;
       const orphan = outId && !succs.length && !isFinal && !!s.outputPartId;

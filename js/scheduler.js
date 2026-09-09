@@ -199,7 +199,7 @@
         warnings.push({ level: 'warn', text: 'Step ' + s.nr + ' "' + s.name + '": output is not used by any other step and is not listed as a deliverable. Assuming 1 per product; add it under "Delivered separately" to set the quantity.' });
       } else g = demand[s.outputPartId] != null ? demand[s.outputPartId] : qty;
       // yield: start enough units so that `g` good ones come out (scrap model: failed units are lost)
-      const y = S.yieldOf(s);
+      const y = s._chainedIn ? 1 : S.yieldOf(s);
       const u = Math.ceil(g / y - 1e-9);
       units[sid] = u; good[sid] = g;
       (s.components || []).forEach(c => {
@@ -371,21 +371,23 @@
       const lots = S.lots(units, lt.lotSize);
       const yld = S.yieldOf(s);
       const workers = Math.max(1, U.num(s.workers, 1));
-      const fixed = Math.max(0, U.num(s.fixedMinutes, 0)), perUnit = Math.max(0, U.num(s.workMinutes, 0));
-      const processHours = Math.max(0, U.num(s.processHours != null ? s.processHours : s.cureHours, 0));
+      // a link step (produces an item made by a chained recipe, no components of its own) carries no time: the work lives in that recipe
+      const link = !!s._chainedIn;
+      const fixed = link ? 0 : Math.max(0, U.num(s.fixedMinutes, 0)), perUnit = link ? 0 : Math.max(0, U.num(s.workMinutes, 0));
+      const processHours = link ? 0 : Math.max(0, U.num(s.processHours != null ? s.processHours : s.cureHours, 0));
       // calendars: attended work follows the worker pool's calendar; the process follows the equipment's calendar
       const workCal = (pool && pool.calendarId && calById[pool.calendarId]) || cal;
       let procCal, procCalObj = null;
       if (resource) { procCal = resource.calendar === 'shop' ? 'shop' : '24_7'; if (procCal === 'shop') procCalObj = (resource.calendarId && calById[resource.calendarId]) || cal; }
       else { procCal = cal.s.cureUsesCalendar ? '24_7' : 'shop'; if (procCal === 'shop') procCalObj = cal; }
       const r = rows[s.id] = {
-        step: s, units, good: ex.good[s.id], yield: yld, workers, pool, resource, lotSize: lt.lotSize, capacity: lt.capacity, processHours, procCal, workCal, procCalObj,
+        step: s, units, good: ex.good[s.id], yield: yld, workers: link ? 0 : workers, pool: link ? null : pool, resource: link ? null : resource, lotSize: lt.lotSize, capacity: link ? Infinity : lt.capacity, processHours, procCal, workCal, procCalObj, link,
         transfer: !!s.transferPerLot,
         lotsE: lots.map(l => ({ units: l.units, cum: l.cum, goodCum: l.cum * yld })),
         lotsL: lots.map(l => ({ units: l.units, cum: l.cum, goodCum: l.cum * yld })),
         preds: Array.from(graph.preds[s.id]), succs: Array.from(graph.succs[s.id])
       };
-      r.attMinutes = lot => fixed + (perUnit * lot.units) / workers;
+      r.attMinutes = lot => fixed + (perUnit * lot.units) / Math.max(1, workers);
       r.workMinutes = lots.reduce((a, l) => a + r.attMinutes(l), 0);
       r.laborHours = (fixed * workers * lots.length + perUnit * units) / 60;
       r.nLots = lots.length;

@@ -434,6 +434,8 @@ t('placeholder step producing an item without components chains the recipe that 
   assert.deepStrictEqual(rx.subRecipes[0].viaPlaceholder, [20]);
   const res = S.schedule({ recipe: rx, partsById: partsC, qty: 1, due: fri, planStart: mon, calendar: cal });
   assert.strictEqual(res.rows.m2.units, 6);
+  assert.strictEqual(res.rows.m2.link, true);
+  assert.strictEqual(res.rows.m2.workMinutes, 0);        // link step carries no time of its own
   assert.strictEqual(res.rows['rsl:t'].units, 7);      // 6 good out of 90 %
   assert.strictEqual(res.rows['rsl:a'].units, 7);
   assert.strictEqual(res.purchases.find(p => p.partId === 'seal').qty, 21);
