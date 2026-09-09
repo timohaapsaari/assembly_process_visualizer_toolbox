@@ -299,6 +299,7 @@
     r.steps.forEach(s => {
       const card = document.querySelector('.step-card[data-id="' + s.id + '"]'); if (!card) return;
       const rs = g.byId[s.id] || s;
+      const isLink = !!(s.outputPartId && !(s.components || []).length && !s.continuesPrevious && Store.state.recipes.find(x => x.id !== r.id && (x.finalPartId === s.outputPartId || (!x.finalPartId && Scheduler.recipeFinalPart(x) === s.outputPartId))));
       const ci = card.querySelector('.chain-info');
       if (ci) {
         const po = rs.outputPartId ? pb[rs.outputPartId] : null;
@@ -320,7 +321,6 @@
       else card.querySelector('.summary').innerHTML = 'Per product: <b>' + U.minutesToText(wm) + '</b> attended work' + (U.num(s.workers, 1) > 1 ? ' with ' + s.workers + ' workers' : '') + ' (' + U.round(Scheduler.stepLaborHours(s, units, res), 2) + ' labor h)' + (U.num(s.processHours) ? ' + <b style="color:var(--cure)">' + U.hoursToText(U.num(s.processHours)) + ' process per lot</b>' : '') + (units !== 1 && Scheduler.yieldOf(s) >= 1 ? ' · ' + units + ' units per product' : '') + yTxt + lotTxt + per10;
       const outId = rs.outputPartId;
       const ciEl = card.querySelector('.chain-info');
-      const isLink = !!(s.outputPartId && !(s.components || []).length && !s.continuesPrevious && Store.state.recipes.find(x => x.id !== r.id && (x.finalPartId === s.outputPartId || (!x.finalPartId && Scheduler.recipeFinalPart(x) === s.outputPartId))));
       if (ciEl && s.outputPartId && !(s.components || []).length && !s.continuesPrevious) {
         const maker = Store.state.recipes.find(x => x.id !== r.id && (x.finalPartId === s.outputPartId || (!x.finalPartId && Scheduler.recipeFinalPart(x) === s.outputPartId)));
         ciEl.innerHTML = maker ? '<span class="badge ok">link to recipe "' + UI.esc(maker.name) + '"</span> <span class="muted">its steps, times and resources are used in plans; the time fields of this step are ignored</span>' : '<span class="badge warn">no components and no recipe makes this item</span> <span class="muted">add components here, or create a recipe with this item as final product</span>';
