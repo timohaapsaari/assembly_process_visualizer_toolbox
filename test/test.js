@@ -230,4 +230,58 @@ t('sub-assembly due date constrains its producing step and adds extra demand', (
   assert.strictEqual(res2.milestones[0].late, true);
   assert.strictEqual(res2.startsInPast, true);
 });
+
+/* ---------- Yield & multi-shift calendars ---------- */
+t('yield at a pass-through test raises assembly units and material demand', () => {
+  const r5 = JSON.parse(JSON.stringify(recipe));
+  r5.steps[2].yieldPct = 80; // pressure test on the same item, 80 % pass
+  const res = S.schedule({ recipe: r5, partsById: parts, qty: 10, due: new Date(2026, 8, 25, 15, 30), planStart: new Date(2026, 8, 14, 7, 0), calendar: cal });
+  assert.strictEqual(res.rows.s3.units, 13);   // ceil(10 / 0.8)
+  assert.strictEqual(res.rows.s3.good, 10);
+  assert.strictEqual(res.rows.s2.units, 13);   // final assembly must build 13
+  assert.strictEqual(res.rows.s1.units, 13);   // and 13 piston sub-assemblies
+  assert.strictEqual(res.purchases.find(p => p.partId === 'hous').qty, 13);
+  assert.strictEqual(res.purchases.find(p => p.partId === 'seal').qty, 26);
+  assert.strictEqual(res.totals.scrapUnits, 3);
+});
+t('yield on a producing step scales its own units and components', () => {
+  const r6 = JSON.parse(JSON.stringify(recipe));
+  r6.steps[0].yieldPct = 50; // bonding scrap
+  const ex = S.explode(r6, parts, 10);
+  assert.strictEqual(ex.units.s1, 20);
+  assert.strictEqual(ex.purchases.find(p => p.partId === 'seal').qty, 40);
+  assert.strictEqual(ex.units.s2, 10);
+});
+t('transfer per lot uses good units from a yielded predecessor', () => {
+  const r7 = JSON.parse(JSON.stringify(recipe2));
+  r7.steps[0].yieldPct = 50; // half the bonded rods fail
+  const res = S.schedule({ recipe: r7, partsById: parts, resourcesById: resources, qty: 6, due: fri, planStart: mon, calendar: cal });
+  assert.strictEqual(res.rows.b.units, 12);
+  // assembly lot 1 (needs 1 good rod) can start once 2 rods are cured (goodCum 1.0)
+  assert.strictEqual(U.isoDateTime(res.rows.a.lotsE[0].attStart), '2026-09-15 07:00');
+  assert.strictEqual(res.rows.a.nLots, 6);
+});
+const twoShift = new Calendar({ shifts: [
+  { days: [1, 2, 3, 4, 5], start: '06:00', end: '14:00', breakStart: '10:00', breakMinutes: 30 },
+  { days: [1, 2, 3, 4], start: '14:00', end: '22:00', breakStart: '18:00', breakMinutes: 30 }
+], holidays: [] });
+t('two-shift calendar merges windows and counts minutes per day', () => {
+  const w = twoShift.windows(new Date(2026, 8, 14)); // Monday
+  assert.strictEqual(w.length, 3); // 06-10, 10:30-18, 18:30-22 (14:00 boundary merged)
+  assert.strictEqual(U.hhmm(w[2].b), '22:00');
+  assert.strictEqual(twoShift.minutesOn(new Date(2026, 8, 14)), 900);
+  assert.strictEqual(twoShift.minutesOn(new Date(2026, 8, 18)), 450); // Friday, one shift
+  assert.strictEqual(twoShift.addWorking(new Date(2026, 8, 14, 13, 0), 120).getHours(), 15);
+});
+t('worker pool on a two-shift calendar works evenings, one-shift pool does not', () => {
+  const res2 = { asm: { id: 'asm', name: 'Assemblers', type: 'labor', capacity: 2 }, testers: { id: 'testers', name: 'Testers', type: 'labor', capacity: 1, calendarId: 'c2' } };
+  const r8 = { id: 'r8', name: 'Shifts', finalPartId: 'fin', steps: [
+    { id: 'a', nr: 10, name: 'Assemble', type: 'assembly', outputPartId: 'fin', components: [{ partId: 'hous', qty: 1 }], workMinutes: 60, workers: 1, workerPoolId: 'asm' },
+    { id: 't', nr: 20, name: 'Test', type: 'test', outputPartId: 'fin', components: [{ partId: 'fin', qty: 1 }], workMinutes: 60, workers: 1, workerPoolId: 'testers' }
+  ] };
+  const res = S.schedule({ recipe: r8, partsById: parts, resourcesById: res2, calendarsById: { c2: twoShift }, qty: 8, due: fri, planStart: new Date(2026, 8, 14, 7, 0), calendar: cal });
+  assert.strictEqual(U.isoDateTime(res.rows.a.EworkEnd), '2026-09-14 15:30'); // 8 h within the day shift
+  assert.strictEqual(U.isoDateTime(res.rows.t.ES), '2026-09-14 15:30');       // testers keep going in the evening
+  assert.strictEqual(U.isoDateTime(res.rows.t.EworkEnd), '2026-09-15 08:00'); // 15:30-18:00 + 18:30-22:00 = 6 h, remaining 2 h from 06:00 next day
+});
 console.log('\n' + passed + ' tests passed' + (process.exitCode ? ', some FAILED' : ''));

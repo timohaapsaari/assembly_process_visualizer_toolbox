@@ -5,4 +5,4 @@ Sensor test rig;equipment;1;1;0,25;shop;
 Pressure test bench;equipment;1;1;0,5;shop;
 Burn-in cabinet;equipment;1;4;8;24/7;4 actuators per 8 h cycle
 Assemblers;labor;3;;;;
-Test technicians;labor;1;;;;
+Test technicians;labor;1;;;Two shifts (test dept.);

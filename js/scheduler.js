@@ -123,28 +123,42 @@
     (extraDemand || []).forEach(e => { if (e.partId && U.num(e.qty) > 0) demand[e.partId] = (demand[e.partId] || 0) + U.num(e.qty); });
 
     const producedParts = new Set(Object.keys(graph.producers));
+    const good = {};    // stepId -> good units out
     const rev = graph.order.slice().reverse(); // consumers first
     rev.forEach(sid => {
       const s = graph.byId[sid];
-      let u;
-      if (s.outputPartId && demand[s.outputPartId] != null) u = demand[s.outputPartId];
+      let g;
+      if (s.outputPartId && demand[s.outputPartId] != null) g = demand[s.outputPartId];
       else if (s.outputPartId && s.outputPartId !== finalId && graph.succs[sid].size === 0) {
-        u = qty; // orphan output: assume one per product
+        g = qty; // orphan output: assume one per product
         warnings.push({ level: 'warn', text: 'Step ' + s.nr + ' "' + s.name + '": output is not used by any other step and is not the final product. Assuming ' + qty + ' pcs.' });
-      } else u = demand[s.outputPartId] != null ? demand[s.outputPartId] : qty;
-      units[sid] = u;
+      } else g = demand[s.outputPartId] != null ? demand[s.outputPartId] : qty;
+      // yield: start enough units so that `g` good ones come out (scrap model: failed units are lost)
+      const y = S.yieldOf(s);
+      const u = Math.ceil(g / y - 1e-9);
+      units[sid] = u; good[sid] = g;
       (s.components || []).forEach(c => {
-        if (c.partId === s.outputPartId) return; // pass-through
+        if (c.partId === s.outputPartId) {
+          // pass-through (test on the same item): the producer must deliver the tested quantity
+          if (u > (demand[c.partId] || 0)) demand[c.partId] = u;
+          return;
+        }
         demand[c.partId] = (demand[c.partId] || 0) + u * Math.max(0, U.num(c.qty, 1));
       });
     });
     // steps not in order (cycle) get qty
-    (recipe.steps || []).forEach(s => { if (units[s.id] == null) units[s.id] = qty; });
+    (recipe.steps || []).forEach(s => { if (units[s.id] == null) { units[s.id] = qty; good[s.id] = qty; } });
 
     const purchases = Object.keys(demand)
       .filter(pid => !producedParts.has(pid))
       .map(pid => ({ partId: pid, qty: demand[pid] }));
-    return { units, demand, purchases, warnings };
+    return { units, good, demand, purchases, warnings };
+  };
+
+  /** Yield of a step as a fraction 0 < y <= 1 (100 % when not set). */
+  S.yieldOf = function (step) {
+    const y = U.num(step.yieldPct, 100);
+    return Math.min(1, Math.max(0.01, (y > 0 ? y : 100) / 100));
   };
 
   /** Split [a,b] into working windows (for drawing bars that skip nights/weekends). */
@@ -186,6 +200,7 @@
    */
   S.schedule = function (opts) {
     const recipe = opts.recipe, partsById = opts.partsById || {}, resById = opts.resourcesById || {};
+    const calById = opts.calendarsById || {};
     const qty = Math.max(1, U.num(opts.qty, 1));
     const cal = opts.calendar instanceof Calendar ? opts.calendar : new Calendar(opts.calendar);
     const due = opts.due instanceof Date ? new Date(opts.due) : U.parseLocal(opts.due);
@@ -207,15 +222,20 @@
       const pool = s.workerPoolId ? (resById[s.workerPoolId] || null) : null;
       const lt = S.lotting(s, resource);
       const lots = S.lots(units, lt.lotSize);
+      const yld = S.yieldOf(s);
       const workers = Math.max(1, U.num(s.workers, 1));
       const fixed = Math.max(0, U.num(s.fixedMinutes, 0)), perUnit = Math.max(0, U.num(s.workMinutes, 0));
       const processHours = Math.max(0, U.num(s.processHours != null ? s.processHours : s.cureHours, 0));
-      const procCal = resource ? (resource.calendar === 'shop' ? 'shop' : '24_7') : (cal.s.cureUsesCalendar ? '24_7' : 'shop');
+      // calendars: attended work follows the worker pool's calendar; the process follows the equipment's calendar
+      const workCal = (pool && pool.calendarId && calById[pool.calendarId]) || cal;
+      let procCal, procCalObj = null;
+      if (resource) { procCal = resource.calendar === 'shop' ? 'shop' : '24_7'; if (procCal === 'shop') procCalObj = (resource.calendarId && calById[resource.calendarId]) || cal; }
+      else { procCal = cal.s.cureUsesCalendar ? '24_7' : 'shop'; if (procCal === 'shop') procCalObj = cal; }
       const r = rows[s.id] = {
-        step: s, units, workers, pool, resource, lotSize: lt.lotSize, capacity: lt.capacity, processHours, procCal,
+        step: s, units, good: ex.good[s.id], yield: yld, workers, pool, resource, lotSize: lt.lotSize, capacity: lt.capacity, processHours, procCal, workCal, procCalObj,
         transfer: !!s.transferPerLot,
-        lotsE: lots.map(l => ({ units: l.units, cum: l.cum })),
-        lotsL: lots.map(l => ({ units: l.units, cum: l.cum })),
+        lotsE: lots.map(l => ({ units: l.units, cum: l.cum, goodCum: l.cum * yld })),
+        lotsL: lots.map(l => ({ units: l.units, cum: l.cum, goodCum: l.cum * yld })),
         preds: Array.from(graph.preds[s.id]), succs: Array.from(graph.succs[s.id])
       };
       r.attMinutes = lot => fixed + (perUnit * lot.units) / workers;
@@ -223,8 +243,8 @@
       r.laborHours = (fixed * workers * lots.length + perUnit * units) / 60;
       r.nLots = lots.length;
       r.waves = isFinite(lt.capacity) ? Math.ceil(lots.length / lt.capacity) : 1;
-      r.addProc = (t, h) => !h ? new Date(t) : (procCal === 'shop' ? cal.addWorking(t, h * 60) : new Date(t.getTime() + h * 3600000));
-      r.subProc = (t, h) => !h ? new Date(t) : (procCal === 'shop' ? cal.subtractWorking(t, h * 60) : new Date(t.getTime() - h * 3600000));
+      r.addProc = (t, h) => !h ? new Date(t) : (procCalObj ? procCalObj.addWorking(t, h * 60) : new Date(t.getTime() + h * 3600000));
+      r.subProc = (t, h) => !h ? new Date(t) : (procCalObj ? procCalObj.subtractWorking(t, h * 60) : new Date(t.getTime() - h * 3600000));
     });
 
     // quantity of predecessor output needed per unit of successor output (undefined = no part relation)
@@ -251,8 +271,8 @@
           return;
         }
         r.lotsL.forEach((l, j) => {
-          const prevCum = j ? r.lotsL[j - 1].cum : 0;
-          const k = t.lotsL.findIndex(tl => tl.cum * q > prevCum + 1e-9);
+          const prevGood = j ? r.lotsL[j - 1].goodCum : 0;
+          const k = t.lotsL.findIndex(tl => tl.cum * q > prevGood + 1e-9);
           if (k >= 0 && t.lotsL[k].attStart < lotLF[j]) lotLF[j] = t.lotsL[k].attStart;
         });
       });
@@ -260,10 +280,10 @@
         const L = r.lotsL[j];
         let procEnd = lotLF[j];
         if (isFinite(r.capacity) && j + r.capacity < n && r.lotsL[j + r.capacity].attStart < procEnd) procEnd = r.lotsL[j + r.capacity].attStart;
-        let attEnd = cal.snapBackward(r.subProc(procEnd, r.processHours));
-        if (j + 1 < n && r.lotsL[j + 1].attStart < attEnd) attEnd = cal.snapBackward(r.lotsL[j + 1].attStart);
+        let attEnd = r.workCal.snapBackward(r.subProc(procEnd, r.processHours));
+        if (j + 1 < n && r.lotsL[j + 1].attStart < attEnd) attEnd = r.workCal.snapBackward(r.lotsL[j + 1].attStart);
         L.attEnd = attEnd;
-        L.attStart = cal.subtractWorking(attEnd, r.attMinutes(L));
+        L.attStart = r.workCal.subtractWorking(attEnd, r.attMinutes(L));
         L.procEnd = r.addProc(attEnd, r.processHours);
       }
       r.LS = r.lotsL[0].attStart; r.LworkEnd = r.lotsL[n - 1].attEnd;
@@ -278,7 +298,7 @@
         const q = qtyPerUnit(p, r);
         if (!p.transfer || q === undefined || q <= 0) return p.EF;
         const need = r.lotsE[j].cum * q;
-        const i = p.lotsE.findIndex(pl => pl.cum >= need - 1e-9);
+        const i = p.lotsE.findIndex(pl => pl.goodCum >= need - 1e-9);
         return i >= 0 ? p.lotsE[i].procEnd : p.EF;
       };
       let crewFree = planStart; const slotFree = [];
@@ -290,8 +310,8 @@
         if (j === 0) r.driverPreds = contribs.filter(c => Math.abs(c.t - ready) <= 60000 && c.t > planStart).map(c => c.pid);
         let start = ready > crewFree ? ready : crewFree;
         if (isFinite(r.capacity)) { const sf = slotFree[j % r.capacity]; if (sf && sf > start) start = sf; }
-        L.attStart = cal.snapForward(start);
-        L.attEnd = cal.addWorking(L.attStart, r.attMinutes(L));
+        L.attStart = r.workCal.snapForward(start);
+        L.attEnd = r.workCal.addWorking(L.attStart, r.attMinutes(L));
         L.procEnd = r.addProc(L.attEnd, r.processHours);
         L.waitedFor = driver && ready > crewFree ? driver : null;
         crewFree = L.attEnd;
@@ -330,11 +350,12 @@
       const EF = prods.reduce((x, r) => (!x || r.EF > x ? r.EF : x), null);
       const LF = prods.reduce((x, r) => (!x || r.LF > x ? r.LF : x), null);
       const LS = prods.reduce((x, r) => (!x || r.LS < x ? r.LS : x), null);
-      return { partId: m.partId, part: partsById[m.partId], due: m.due, qty: m.qty, label: m.label, EF, LF, LS, late: EF ? EF > m.due : false, lateMinutes: EF && EF > m.due ? cal.workingMinutesBetween(m.due, EF) : 0 };
+      const lm = EF && EF > m.due ? (cal.workingMinutesBetween(m.due, EF) || (EF - m.due) / 60000) : 0;
+      return { partId: m.partId, part: partsById[m.partId], due: m.due, qty: m.qty, label: m.label, EF, LF, LS, late: EF ? EF > m.due : false, lateMinutes: lm };
     });
 
     const late = projectedFinish > due;
-    const lateMinutes = late ? cal.workingMinutesBetween(due, projectedFinish) : 0;
+    const lateMinutes = late ? (cal.workingMinutesBetween(due, projectedFinish) || (projectedFinish - due) / 60000) : 0;
     const startsInPast = requiredStart < planStart;
     const shortMinutes = startsInPast ? cal.workingMinutesBetween(requiredStart, planStart) : 0;
 
@@ -358,6 +379,7 @@
 
     const list = graph.order.map(id => rows[id]).concat((recipe.steps || []).filter(s => graph.order.indexOf(s.id) < 0).map(s => rows[s.id]));
     const totals = {
+      scrapUnits: list.reduce((a, r) => a + Math.max(0, r.units - r.good), 0),
       laborHours: list.reduce((a, r) => a + r.laborHours, 0),
       workMinutes: list.reduce((a, r) => a + r.workMinutes, 0),
       cureHours: list.reduce((a, r) => a + r.processHours * r.nLots, 0),
@@ -367,7 +389,7 @@
     };
 
     return {
-      recipe, qty, due, planStart, calendar: cal, graph, rows, list, purchases, warnings, totals, milestones: milestoneStatus,
+      recipe, qty, due, planStart, calendar: cal, calendarsById: calById, graph, rows, list, purchases, warnings, totals, milestones: milestoneStatus,
       projectedFinish, requiredStart, late, lateMinutes, startsInPast, shortMinutes, units: ex.units
     };
   };
@@ -421,7 +443,8 @@
           cur = next;
         }
       });
-      const availPerDay = e.resource.type === 'labor' || e.resource.calendar === 'shop' ? (cal.minutesPerDay() / 60) : 24;
+      const rc = e.resource.calendarId && result.calendarsById && result.calendarsById[e.resource.calendarId];
+      const availPerDay = e.resource.type === 'labor' || e.resource.calendar === 'shop' ? ((rc || cal).minutesPerDay() / 60) : 24;
       e.days = Object.keys(days).sort().map(k => ({ date: k, hours: days[k], util: cap > 0 ? days[k] / (cap * availPerDay) : 0 }));
       e.utilization = e.days.length && cap > 0 ? e.days.reduce((a, d) => a + d.hours, 0) / (cap * availPerDay * e.days.length) : 0;
     });
@@ -435,7 +458,7 @@
     const days = {};
     const events = [];
     result.list.forEach(r => {
-      S.lotsOf(r, mode).forEach(l => S.workSegments(cal, l.attStart, l.attEnd).forEach(seg => {
+      S.lotsOf(r, mode).forEach(l => S.workSegments(r.workCal || cal, l.attStart, l.attEnd).forEach(seg => {
         const key = U.isoDate(seg.a);
         const d = days[key] || (days[key] = { date: key, laborHours: 0, avgWorkers: 0, peakWorkers: 0 });
         d.laborHours += ((seg.b - seg.a) / 60000) * r.workers / 60;
@@ -457,7 +480,7 @@
       return {
         step_nr: s.nr, step_name: s.name, step_type: s.type,
         output_item_nr: out ? out.itemNr : '', output_name: out ? out.name : '',
-        units: r.units, workers: r.workers,
+        units: r.units, good_units: r.good, yield_pct: Math.round(r.yield * 100), workers: r.workers,
         work_minutes_total: U.round(r.workMinutes, 1), labor_hours: U.round(r.laborHours, 2), process_hours_per_lot: r.processHours,
         resource: r.resource ? r.resource.name : '', lot_size: r.lotSize || '', lots: r.nLots, worker_pool: r.pool ? r.pool.name : '',
         jit_start: U.isoDateTime(r.LS), jit_work_end: U.isoDateTime(r.LworkEnd), jit_finish: U.isoDateTime(r.LF),

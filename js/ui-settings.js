@@ -11,18 +11,15 @@
     host.innerHTML = '';
     const panel = UI.el('<div class="grid-2">' +
       '<div class="panel"><div class="panel-head"><h2>Shop calendar</h2></div>' +
-      '<p class="muted small">Work time (setup and per-unit labor) is scheduled only inside these working hours. Curing and wait times run on calendar time by default (24/7), like paint drying over a weekend.</p>' +
-      '<div class="form-row"><label class="f"><span>Working days</span><div class="flex" id="wd"></div></label></div>' +
-      '<div class="form-row">' +
-      '<label class="f"><span>Shift start</span><input type="time" id="s-start" value="' + UI.esc(s.shiftStart) + '"></label>' +
-      '<label class="f"><span>Shift end</span><input type="time" id="s-end" value="' + UI.esc(s.shiftEnd) + '"></label>' +
-      '<label class="f"><span>Break start</span><input type="time" id="s-brk" value="' + UI.esc(s.breakStart || '') + '"></label>' +
-      '<label class="f"><span>Break length (min)</span><input type="number" id="s-brklen" min="0" value="' + U.num(s.breakMinutes) + '"></label>' +
-      '</div>' +
+      '<p class="muted small">Attended work is scheduled only inside these shifts. Worker pools and shop-hours equipment can use a different named calendar (below), e.g. a two-shift test department. Process and cure times on 24/7 equipment run through nights and weekends.</p>' +
+      '<div id="s-shifts"></div>' +
       '<div class="form-row"><label class="check"><input type="checkbox" id="s-cure" ' + (s.cureUsesCalendar ? 'checked' : '') + '> Process / cure time of steps without a resource runs 24/7 (calendar time)</label></div>' +
       '<div class="form-row"><label class="f"><span>General worker pool size (steps without a worker pool; 0 = no check)</span><input type="number" id="s-max" min="0" value="' + U.num(s.maxWorkers) + '"></label></div>' +
       '<div class="muted small" id="s-summary"></div>' +
       '</div>' +
+      '<div class="panel"><div class="panel-head"><h2>Named calendars</h2><span class="spacer"></span><button class="btn btn-sm btn-primary" id="c-add">+ Calendar</button></div>' +
+      '<p class="muted small">Additional shift patterns for worker pools and shop-hours equipment, e.g. "Two shifts" or "Weekend crew". Holidays apply to all calendars. Assign them on the Resources tab.</p>' +
+      '<div id="c-list"></div></div>' +
       '<div class="panel"><div class="panel-head"><h2>Holidays / non-working days</h2></div>' +
       '<p class="muted small">One date per line (YYYY-MM-DD). Also accepts 24.12.2026.</p>' +
       '<textarea id="s-hol" style="min-height:180px" class="mono">' + UI.esc((s.holidays || []).join('\n')) + '</textarea>' +
@@ -34,23 +31,15 @@
       '</div></div>');
     host.appendChild(panel);
 
-    const wd = panel.querySelector('#wd');
-    DAYS.forEach((d, i) => {
-      const l = UI.el('<label class="check"><input type="checkbox" value="' + i + '" ' + ((s.workdays || []).indexOf(i) >= 0 ? 'checked' : '') + '> ' + d + '</label>');
-      l.querySelector('input').addEventListener('change', () => {
-        s.workdays = Array.from(wd.querySelectorAll('input:checked')).map(x => +x.value);
-        Store.save(); summary();
-      });
-      wd.appendChild(l);
-    });
     const summary = () => {
       const cal = Store.calendar();
-      panel.querySelector('#s-summary').textContent = 'Net working time per day: ' + U.minutesToText(cal.minutesPerDay()) + ' · ' + (s.workdays || []).length + ' working days per week · ' + (s.holidays || []).length + ' holidays';
+      panel.querySelector('#s-summary').textContent = 'Average working time per working day: ' + U.minutesToText(cal.minutesPerDay()) + ' · ' + cal.workdays.size + ' working days per week · ' + (s.holidays || []).length + ' holidays';
     };
-    UI.bind(panel.querySelector('#s-start'), s, 'shiftStart', 'text', summary);
-    UI.bind(panel.querySelector('#s-end'), s, 'shiftEnd', 'text', summary);
-    UI.bind(panel.querySelector('#s-brk'), s, 'breakStart', 'text', summary);
-    UI.bind(panel.querySelector('#s-brklen'), s, 'breakMinutes', 'num', summary);
+    const syncLegacy = () => { const f = s.shifts[0]; if (f) { s.workdays = f.days.slice(); s.shiftStart = f.start; s.shiftEnd = f.end; s.breakStart = f.breakStart; s.breakMinutes = f.breakMinutes; } };
+    if (!Array.isArray(s.shifts) || !s.shifts.length) s.shifts = [Calendar.legacyShift(s)];
+    SettingsUI.shiftEditor(panel.querySelector('#s-shifts'), s.shifts, () => { syncLegacy(); Store.save(); summary(); }, true);
+    SettingsUI.renderCalendars(panel.querySelector('#c-list'));
+    panel.querySelector('#c-add').addEventListener('click', () => { Store.addCalendar({ name: 'Calendar ' + (Store.state.calendars.length + 1) }); Store.save(); SettingsUI.renderCalendars(panel.querySelector('#c-list')); });
     UI.bind(panel.querySelector('#s-cure'), s, 'cureUsesCalendar');
     UI.bind(panel.querySelector('#s-max'), s, 'maxWorkers', 'int');
     const hol = panel.querySelector('#s-hol');
@@ -82,6 +71,50 @@
     // Midsummer Eve: Friday between Jun 19-25
     for (let d = 19; d <= 25; d++) { const dt = new Date(y, 5, d); if (dt.getDay() === 5) { list.push(U.isoDate(dt)); break; } }
     return list;
+  };
+
+  /** Editable list of shift rows for a `shifts` array. onChange() after every edit. */
+  SettingsUI.shiftEditor = function (host, shifts, onChange, keepOne) {
+    host.innerHTML = '';
+    shifts.forEach((sh, i) => {
+      const row = UI.el('<div class="form-row" style="margin-bottom:6px;align-items:flex-end">' +
+        '<label class="f"><span>Shift ' + (i + 1) + ' days</span><div class="flex days"></div></label>' +
+        '<label class="f"><span>Start</span><input type="time" class="st" value="' + UI.esc(sh.start || '') + '"></label>' +
+        '<label class="f"><span>End</span><input type="time" class="en" value="' + UI.esc(sh.end || '') + '"></label>' +
+        '<label class="f"><span>Break start</span><input type="time" class="bs" value="' + UI.esc(sh.breakStart || '') + '"></label>' +
+        '<label class="f"><span>Break (min)</span><input type="number" class="bl w-s" min="0" value="' + U.num(sh.breakMinutes) + '"></label>' +
+        '<button class="btn btn-icon btn-danger" title="Remove shift" ' + (keepOne && shifts.length === 1 ? 'disabled' : '') + '>✕</button></div>');
+      const days = row.querySelector('.days');
+      DAYS.forEach((d, di) => {
+        const l = UI.el('<label class="check"><input type="checkbox" value="' + di + '" ' + ((sh.days || []).indexOf(di) >= 0 ? 'checked' : '') + '> ' + d + '</label>');
+        l.querySelector('input').addEventListener('change', () => { sh.days = Array.from(days.querySelectorAll('input:checked')).map(x => +x.value); onChange(); });
+        days.appendChild(l);
+      });
+      const bindT = (cls, key, num) => row.querySelector(cls).addEventListener('change', e => { sh[key] = num ? U.num(e.target.value) : e.target.value; onChange(); });
+      bindT('.st', 'start'); bindT('.en', 'end'); bindT('.bs', 'breakStart'); bindT('.bl', 'breakMinutes', true);
+      row.querySelector('button').addEventListener('click', () => { shifts.splice(i, 1); onChange(); SettingsUI.shiftEditor(host, shifts, onChange, keepOne); });
+      host.appendChild(row);
+    });
+    const add = UI.el('<button class="btn btn-sm">+ Add shift (e.g. evening shift)</button>');
+    add.addEventListener('click', () => { const last = shifts[shifts.length - 1] || Calendar.legacyShift(Store.state.settings); shifts.push({ days: (last.days || [1, 2, 3, 4, 5]).slice(), start: last.end || '15:30', end: '23:00', breakStart: '', breakMinutes: 0 }); onChange(); SettingsUI.shiftEditor(host, shifts, onChange, keepOne); });
+    host.appendChild(add);
+  };
+
+  SettingsUI.renderCalendars = function (host) {
+    host.innerHTML = '';
+    const list = Store.state.calendars || [];
+    if (!list.length) { host.appendChild(UI.el('<p class="muted small">No named calendars. The shop calendar applies to everything.</p>')); return; }
+    list.forEach(c => {
+      const box = UI.el('<div class="step-card" style="border-left-color:#64748b;margin-bottom:8px"><div class="head"><input type="text" class="name" value="' + UI.esc(c.name) + '" placeholder="Calendar name"><span class="muted small used"></span><span class="spacer"></span><button class="btn btn-icon btn-danger" title="Delete calendar">✕</button></div><div class="shifts mt"></div><div class="muted small mt sum"></div></div>');
+      const used = Store.state.resources.filter(r => r.calendarId === c.id).map(r => r.name);
+      box.querySelector('.used').textContent = used.length ? 'used by ' + used.join(', ') : 'not used by any resource';
+      UI.bind(box.querySelector('.name'), c, 'name');
+      const sum = () => { const cal = Store.calendarFor(c.id); box.querySelector('.sum').textContent = 'Average ' + U.minutesToText(cal.minutesPerDay()) + ' per working day · ' + cal.workdays.size + ' days per week'; };
+      SettingsUI.shiftEditor(box.querySelector('.shifts'), c.shifts, () => { Store.save(); sum(); }, true);
+      box.querySelector('button.btn-danger').addEventListener('click', async () => { if (await UI.confirm('Delete calendar "' + c.name + '"? Resources using it fall back to the shop calendar.', 'Delete')) { Store.deleteCalendar(c.id); Store.save(); SettingsUI.renderCalendars(host); } });
+      sum();
+      host.appendChild(box);
+    });
   };
 
   root.SettingsUI = SettingsUI;

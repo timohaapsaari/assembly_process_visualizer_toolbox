@@ -12,8 +12,9 @@ browser's localStorage and can be exported/imported as CSV or JSON.
 - **Parts admin** – item nr, name, purchased/manufactured, unit, default work time per unit,
   supplier lead time. Inline editing, filtering, CSV import/export.
 - **Resources** – equipment (bonding fixtures, curing ovens, test chambers, burn-in cabinets) with
-  capacity, lot size and own calendar (24/7 or shop hours), and worker pools with headcount.
-  Capacity × lot size limits how many pieces can be in a process at once.
+  capacity, lot size and own calendar (24/7, shop hours or a named shift calendar), and worker
+  pools with headcount and their own shift calendar. Capacity × lot size limits how many pieces
+  can be in a process at once.
 - **Recipe builder** – build the assembly process as steps. Each step *produces* an output part
   and *uses* component parts with quantities; when a step uses the output of another step the
   dependency is derived automatically (sub-assemblies flow into later steps). Per step:
@@ -23,6 +24,8 @@ browser's localStorage and can be exported/imported as CSV or JSON.
   - process / cure time per lot (adhesive curing, potting, test cycle, burn-in) on a process
     resource; the step runs lot by lot in waves limited by the resource capacity
   - "next step per lot": the successor starts on the first finished lot (transfer batch)
+  - yield %: failed units are scrapped, so the plan starts demand ÷ yield units at that step and
+    the extra demand flows upstream into assembly counts and purchased material
   - extra "also after" predecessors, notes, step type (assembly, sub-assembly, bonding/curing,
     test, inspection, packaging)
   - live validation, per-unit lead time, critical path and product structure tree
@@ -40,8 +43,10 @@ browser's localStorage and can be exported/imported as CSV or JSON.
   - step schedule table with lots and waves, worker load per day with capacity warning
   - materials to purchase with need dates and order-by dates from lead times
   - CSV export of the schedule and the material list, print/PDF
-- **Shop calendar** – working days, shift start/end, break, holidays (Finnish public holidays
-  one click), whether curing runs 24/7, max available workers.
+- **Calendars** – shop calendar with one or more shifts per day, holidays (Finnish public
+  holidays one click), plus named calendars (e.g. a two-shift test department) that worker pools
+  and shop-hours equipment can follow. Curing on 24/7 equipment runs through nights and weekends
+  while assembly stays inside its shifts.
 - **CSV import** – ERP exports for parts, resources, routing steps and BOM lines. Delimiter (`,` `;` tab)
   and decimal commas are auto-detected, headers are auto-mapped (English and Finnish aliases)
   with a manual mapping/preview step. JSON backup/restore of everything.
@@ -59,8 +64,10 @@ and critical-path analysis:
   units (fixture, chamber) is free, so quantities above capacity × lot size run in waves
 - with "next step per lot" a successor lot starts as soon as the cumulative predecessor output
   covers its needs; otherwise it waits for the predecessor's last lot
-- units per step come from exploding the required quantity through the component structure;
-  a step whose output is also one of its inputs (e.g. a test on the same item) is a pass-through
+- units per step come from exploding the required quantity through the component structure and
+  dividing by the step yield (rounded up); a step whose output is also one of its inputs (e.g. a
+  test on the same item) is a pass-through and raises the demand on the producing step
+- attended work follows the worker pool's calendar, the process follows the equipment's calendar
 - backward pass: latest finish of a lot = earliest start of the successor lot that needs it (or the
   due date / sub-assembly due date); mirrored for crew and capacity; forward pass from the
   earliest start gives earliest dates, float and the critical path (chain of driving predecessors)
@@ -90,11 +97,11 @@ test/e2e.js         browser smoke test (node test/e2e.js, needs playwright)
 
 `parts.csv`: `item_nr, name, type (purchased|manufactured), unit, work_minutes, lead_time_days, notes`
 
-`resources.csv`: `name, type (equipment|labor), capacity, lot_size, process_hours, calendar (24/7|shop), notes`
+`resources.csv`: `name, type (equipment|labor), capacity, lot_size, process_hours, calendar (24/7, shop, or a named calendar), notes`
 
 `steps.csv`: `recipe, step_nr, step_name, step_type, output_item_nr, components, work_minutes,
 workers, worker_pool, fixed_minutes, process_hours, resource, lot_size, transfer_per_lot,
-predecessors, notes` – `components` is `ITEM:qty|ITEM:qty`, `resource` and `worker_pool` are
+yield_pct, predecessors, notes` – `components` is `ITEM:qty|ITEM:qty`, `resource` and `worker_pool` are
 resource names (created if missing), `predecessors` lists extra step numbers. The older
 `cure_hours` header is accepted for `process_hours`.
 

@@ -119,6 +119,7 @@
       '<label class="f"><span>Lot size (pcs)</span><input type="number" class="lot w-s" min="0" step="1" value="' + U.num(s.lotSize) + '" placeholder="auto" title="Pieces per lot. 0 = from resource, or whole batch if no resource."></label>' +
       '<label class="f"><span>Process / cure time per lot (h)</span><input type="number" class="cure" min="0" step="0.25" value="' + U.num(s.processHours) + '" title="Unattended time after the attended work: curing, potting, test cycle, burn-in. No workers needed."></label>' +
       '<label class="check" style="align-self:flex-end;padding-bottom:6px" title="Next step may start on the first finished lot instead of waiting for the whole batch"><input type="checkbox" class="transfer" ' + (s.transferPerLot ? 'checked' : '') + '> next step per lot</label>' +
+      '<label class="f"><span>Yield %</span><input type="number" class="yield w-s" min="1" max="100" step="1" value="' + (s.yieldPct == null ? 100 : U.num(s.yieldPct, 100)) + '" title="Share of units that pass. Failed units are scrapped; the plan starts more units upstream to still deliver the required quantity."></label>' +
       '</div>' +
       '<label class="f mt"><span>Also after (extra predecessors)</span><div class="preds"></div></label>' +
       '<label class="f mt"><span>Notes / instructions</span><input type="text" class="notes" style="width:100%" value="' + UI.esc(s.notes || '') + '"></label>' +
@@ -136,6 +137,7 @@
     UI.bind(card.querySelector('.fixed'), s, 'fixedMinutes', 'num', refresh);
     UI.bind(card.querySelector('.cure'), s, 'processHours', 'num', refresh);
     UI.bind(card.querySelector('.lot'), s, 'lotSize', 'num', refresh);
+    UI.bind(card.querySelector('.yield'), s, 'yieldPct', 'num', v => { if (v <= 0 || v > 100) { s.yieldPct = 100; card.querySelector('.yield').value = 100; Store.save(); } refresh(); });
     UI.bind(card.querySelector('.transfer'), s, 'transferPerLot', 'bool', refresh);
     const poolSel = card.querySelector('.pool');
     poolSel.addEventListener('change', () => { s.workerPoolId = poolSel.value || null; Store.save(); refresh(); });
@@ -273,7 +275,8 @@
       if (res) lotTxt = ' · on <b>' + UI.esc(res.name) + '</b>: ' + res.capacity + ' × ' + (lt.lotSize || 'whole batch') + ' pcs at a time (' + (res.calendar === 'shop' ? 'shop hours' : '24/7') + ')';
       else if (lt.lotSize) lotTxt = ' · lots of ' + lt.lotSize + ' pcs';
       const per10 = (() => { if (!res || !lt.lotSize) return ''; const lots = Math.ceil(10 / lt.lotSize), waves = Math.ceil(lots / res.capacity); return ' · 10 pcs = ' + lots + ' lot' + (lots > 1 ? 's' : '') + ' in ' + waves + ' wave' + (waves > 1 ? 's' : ''); })();
-      card.querySelector('.summary').innerHTML = 'Per product: <b>' + U.minutesToText(wm) + '</b> attended work' + (U.num(s.workers, 1) > 1 ? ' with ' + s.workers + ' workers' : '') + ' (' + U.round(Scheduler.stepLaborHours(s, units, res), 2) + ' labor h)' + (U.num(s.processHours) ? ' + <b style="color:var(--cure)">' + U.hoursToText(U.num(s.processHours)) + ' process per lot</b>' : '') + (units !== 1 ? ' · ' + units + ' units per product' : '') + lotTxt + per10;
+      const yTxt = Scheduler.yieldOf(s) < 1 ? ' · <b style="color:var(--danger)">yield ' + Math.round(Scheduler.yieldOf(s) * 100) + '%</b> → start ' + units + ' to get ' + (ex.good[s.id] || 1) : '';
+      card.querySelector('.summary').innerHTML = 'Per product: <b>' + U.minutesToText(wm) + '</b> attended work' + (U.num(s.workers, 1) > 1 ? ' with ' + s.workers + ' workers' : '') + ' (' + U.round(Scheduler.stepLaborHours(s, units, res), 2) + ' labor h)' + (U.num(s.processHours) ? ' + <b style="color:var(--cure)">' + U.hoursToText(U.num(s.processHours)) + ' process per lot</b>' : '') + (units !== 1 && Scheduler.yieldOf(s) >= 1 ? ' · ' + units + ' units per product' : '') + yTxt + lotTxt + per10;
       card.querySelector('.deps').innerHTML = (preds.length ? 'After: <b>' + preds.map(p => UI.esc(p.nr + ' ' + p.name)).join(', ') + '</b>' : '<span class="badge">start step</span>') + (succs.length ? ' &nbsp;→ Before: <b>' + succs.map(p => UI.esc(p.nr + ' ' + p.name)).join(', ') + '</b>' : (s.outputPartId === r.finalPartId ? ' &nbsp;<span class="badge ok">final step</span>' : ''));
     });
 
@@ -292,7 +295,7 @@
     if (r.finalPartId && !g.cycle) {
       const cal = Store.calendar();
       const due = cal.shiftEndOn(new Date(2030, 0, 4)); // any Friday far away
-      const res = Scheduler.schedule({ recipe: r, partsById: pb, resourcesById: rb, qty: 1, due, planStart: new Date(2020, 0, 6, 7, 0), calendar: cal });
+      const res = Scheduler.schedule({ recipe: r, partsById: pb, resourcesById: rb, calendarsById: Store.calendarsById(), qty: 1, due, planStart: new Date(2020, 0, 6, 7, 0), calendar: cal });
       html += '<div class="kpis" style="grid-template-columns:1fr 1fr">' +
         '<div class="kpi"><div class="k">Lead time, 1 pc</div><div class="v">' + U.hoursToText(res.totals.leadCalendarHoursJIT) + '</div><div class="s">calendar, JIT from due date</div></div>' +
         '<div class="kpi"><div class="k">Labor, 1 pc</div><div class="v">' + U.round(res.totals.laborHours, 1) + ' h</div><div class="s">' + U.round(res.totals.cureHours, 1) + ' h cure/wait total</div></div></div>';

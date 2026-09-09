@@ -27,8 +27,8 @@
       '</div>' +
       '<div class="panel help"><h3>CSV formats</h3>' +
       '<p><b>parts.csv</b> — one row per item: <code>item_nr, name, type (purchased|manufactured), unit, work_minutes, lead_time_days, notes</code></p>' +
-      '<p><b>resources.csv</b> — equipment and worker pools: <code>name, type (equipment|labor), capacity, lot_size, process_hours, calendar (24/7|shop), notes</code></p>' +
-      '<p><b>steps.csv</b> — one row per routing step: <code>recipe, step_nr, step_name, step_type, output_item_nr, components, work_minutes, workers, worker_pool, fixed_minutes, process_hours, resource, lot_size, transfer_per_lot, predecessors, notes</code>. <code>components</code> is <code>ITEM:qty|ITEM:qty</code>. <code>resource</code> and <code>worker_pool</code> are resource names (created if missing). <code>predecessors</code> lists extra step numbers (dependencies through parts are automatic).</p>' +
+      '<p><b>resources.csv</b> — equipment and worker pools: <code>name, type (equipment|labor), capacity, lot_size, process_hours, calendar (24/7, shop, or a named calendar), notes</code></p>' +
+      '<p><b>steps.csv</b> — one row per routing step: <code>recipe, step_nr, step_name, step_type, output_item_nr, components, work_minutes, workers, worker_pool, fixed_minutes, process_hours, resource, lot_size, transfer_per_lot, yield_pct, predecessors, notes</code>. <code>components</code> is <code>ITEM:qty|ITEM:qty</code>. <code>resource</code> and <code>worker_pool</code> are resource names (created if missing). <code>predecessors</code> lists extra step numbers (dependencies through parts are automatic).</p>' +
       '<p><b>bom.csv</b> — one row per component line (alternative to the inline components column): <code>recipe, step_nr, component_item_nr, qty</code></p>' +
       '<p>Step types: assembly, subassembly, bonding, test, inspection, packaging, other. Finnish and common ERP header names (e.g. <code>nimike</code>, <code>työaika</code>, <code>Operation No</code>, <code>Setup time</code>) are recognised too.</p>' +
       '</div></div></div>');

@@ -20,18 +20,38 @@
     return (+m[1]) * 60 + (+m[2]);
   }
 
+  /** Normalise one shift definition {days, start, end, breakStart, breakMinutes} into minute offsets. */
+  function normShift(sh) {
+    const start = hm(sh.start, DEFAULTS.shiftStart) ?? 420;
+    let end = hm(sh.end, DEFAULTS.shiftEnd) ?? 930;
+    if (end <= start) end = start + 480;
+    const brk = hm(sh.breakStart, null);
+    const brkLen = Math.max(0, U.num(sh.breakMinutes, 0));
+    return { days: new Set((sh.days || []).map(Number)), start, end, brk: brk != null && brkLen > 0 && brk > start && brk + brkLen < end ? brk : null, brkLen };
+  }
+
+  /**
+   * settings: { workdays, shiftStart, shiftEnd, breakStart, breakMinutes, holidays, cureUsesCalendar, shifts? }
+   * When `shifts` (array of {days, start, end, breakStart, breakMinutes}) is given it defines the working windows;
+   * otherwise the single legacy shift from workdays/shiftStart/shiftEnd is used.
+   */
   function Calendar(settings) {
     this.s = Object.assign({}, DEFAULTS, settings || {});
-    this.start = hm(this.s.shiftStart, DEFAULTS.shiftStart) ?? 420;
-    this.end = hm(this.s.shiftEnd, DEFAULTS.shiftEnd) ?? 930;
-    if (this.end <= this.start) this.end = this.start + 480;
-    this.brk = hm(this.s.breakStart, DEFAULTS.breakStart);
-    this.brkLen = Math.max(0, U.num(this.s.breakMinutes, 0));
+    const legacy = { days: this.s.workdays, start: this.s.shiftStart, end: this.s.shiftEnd, breakStart: this.s.breakStart, breakMinutes: this.s.breakMinutes };
+    const defs = Array.isArray(this.s.shifts) && this.s.shifts.length ? this.s.shifts : [legacy];
+    this.shifts = defs.map(normShift);
+    const first = this.shifts[0];
+    this.start = Math.min.apply(null, this.shifts.map(x => x.start));
+    this.end = Math.max.apply(null, this.shifts.map(x => x.end));
+    this.brk = first.brk; this.brkLen = first.brkLen;
     this.hol = new Set((this.s.holidays || []).map(h => String(h).trim()).filter(Boolean));
-    this.workdays = new Set((this.s.workdays || []).map(Number));
+    this.workdays = new Set();
+    this.shifts.forEach(sh => sh.days.forEach(d => this.workdays.add(d)));
   }
 
   Calendar.DEFAULTS = DEFAULTS;
+  /** Shift definitions as plain objects (for UI / persistence). */
+  Calendar.legacyShift = s => ({ days: (s.workdays || DEFAULTS.workdays).slice(), start: s.shiftStart || DEFAULTS.shiftStart, end: s.shiftEnd || DEFAULTS.shiftEnd, breakStart: s.breakStart || '', breakMinutes: U.num(s.breakMinutes, 0) });
 
   Calendar.prototype.isWorkingDay = function (d) {
     return this.workdays.has(d.getDay()) && !this.hol.has(U.isoDate(d));
@@ -39,26 +59,44 @@
 
   Calendar.prototype.hasWorkdays = function () { return this.workdays.size > 0; };
 
-  /** Working windows for the given day as [{a: Date, b: Date}], in order. */
+  /** Working windows for the given day as [{a: Date, b: Date}], sorted and merged. */
   Calendar.prototype.windows = function (d) {
     if (!this.isWorkingDay(d)) return [];
     const base = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
     const at = m => new Date(base.getTime() + m * 60000);
-    const wins = [];
-    if (this.brk != null && this.brkLen > 0 && this.brk > this.start && this.brk + this.brkLen < this.end) {
-      wins.push({ a: at(this.start), b: at(this.brk) });
-      wins.push({ a: at(this.brk + this.brkLen), b: at(this.end) });
-    } else {
-      wins.push({ a: at(this.start), b: at(this.end) });
-    }
-    return wins;
+    const raw = [];
+    const dow = d.getDay();
+    this.shifts.forEach(sh => {
+      if (!sh.days.has(dow)) return;
+      if (sh.brk != null) { raw.push([sh.start, sh.brk]); raw.push([sh.brk + sh.brkLen, sh.end]); }
+      else raw.push([sh.start, sh.end]);
+    });
+    raw.sort((x, y) => x[0] - y[0]);
+    const merged = [];
+    raw.forEach(w => { const last = merged[merged.length - 1]; if (last && w[0] <= last[1]) last[1] = Math.max(last[1], w[1]); else merged.push(w.slice()); });
+    return merged.map(w => ({ a: at(w[0]), b: at(w[1]) }));
   };
 
-  Calendar.prototype.minutesPerDay = function () {
-    let m = this.end - this.start;
-    if (this.brk != null && this.brkLen > 0 && this.brk > this.start && this.brk + this.brkLen < this.end) m -= this.brkLen;
-    return m;
+  /** Working minutes on a given date. */
+  Calendar.prototype.minutesOn = function (d) {
+    return this.windows(d).reduce((a, w) => a + (w.b - w.a) / 60000, 0);
   };
+
+  /** Average working minutes per working day over a week (Mon 2029-01-01 base, ignoring holidays). */
+  Calendar.prototype.minutesPerDay = function () {
+    let total = 0, n = 0;
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(2029, 0, 1 + i); // 2029-01-01 is a Monday; no holidays assumed in this probe
+      if (!this.workdays.has(d.getDay())) continue;
+      const base = new Date(d); const save = this.hol; this.hol = new Set();
+      total += this.minutesOn(base); n++;
+      this.hol = save;
+    }
+    return n ? total / n : 0;
+  };
+  /** Default shift end / start as "HH:MM" strings (first shift definition). */
+  Calendar.prototype.endHHMM = function () { const m = this.shifts[0].end; return U.pad2(Math.floor(m / 60)) + ':' + U.pad2(m % 60); };
+  Calendar.prototype.startHHMM = function () { const m = this.shifts[0].start; return U.pad2(Math.floor(m / 60)) + ':' + U.pad2(m % 60); };
 
   function nextDay(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1, 0, 0, 0, 0); }
   function prevDayEnd(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, -1); }
@@ -161,12 +199,14 @@
     return this.subtractWorking(t, hours * 60);
   };
 
-  /** End of the shift on the given date (used as default due time). */
+  /** End of the last shift on the given date (used as default due time). */
   Calendar.prototype.shiftEndOn = function (d) {
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, this.end, 0, 0);
+    const w = this.windows(d);
+    return w.length ? new Date(w[w.length - 1].b) : new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, this.end, 0, 0);
   };
   Calendar.prototype.shiftStartOn = function (d) {
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, this.start, 0, 0);
+    const w = this.windows(d);
+    return w.length ? new Date(w[0].a) : new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, this.start, 0, 0);
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = Calendar;

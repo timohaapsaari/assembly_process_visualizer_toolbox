@@ -35,6 +35,7 @@
         { key: 'lotSize', label: 'Lot size (pcs per run)', aliases: ['lotsize', 'lot', 'batchsize', 'batch', 'lotqty', 'eräkoko', 'erakoko', 'erä'] },
         { key: 'workerPool', label: 'Worker pool', aliases: ['workerpool', 'pool', 'team', 'laborpool', 'labourpool', 'crewname', 'tiimi', 'ryhmä'] },
         { key: 'transferPerLot', label: 'Successor may start per lot (yes/no)', aliases: ['transferperlot', 'transfer', 'transferbatch', 'overlap', 'perlot', 'siirtoerä', 'limitys'] },
+        { key: 'yieldPct', label: 'Yield % (good units out)', aliases: ['yieldpct', 'yield', 'fpy', 'firstpassyield', 'passrate', 'goodrate', 'saanto', 'saantoprosentti', 'hyväksymisaste'] },
         { key: 'predecessors', label: 'Extra predecessors (step nrs)', aliases: ['predecessors', 'predecessor', 'preds', 'after', 'dependson', 'depends', 'previous', 'prev', 'edeltäjät', 'edeltavat', 'edeltäjä'] },
         { key: 'notes', label: 'Notes', aliases: ['notes', 'note', 'comment', 'comments', 'remarks', 'instructions', 'huomautus', 'huom', 'ohje'] }
       ]
@@ -48,7 +49,7 @@
         { key: 'capacity', label: 'Capacity (units / persons)', aliases: ['capacity', 'units', 'count', 'quantity', 'qty', 'number', 'persons', 'headcount', 'kapasiteetti', 'lukumäärä', 'lkm', 'henkilöt'] },
         { key: 'lotSize', label: 'Lot size (pcs per unit per run)', aliases: ['lotsize', 'lot', 'batchsize', 'batch', 'eräkoko', 'erakoko'] },
         { key: 'processHours', label: 'Default process time per lot (h)', aliases: ['processhours', 'process', 'processtime', 'runhours', 'runtime', 'cycletime', 'curehours', 'hours', 'prosessiaika', 'kovetusaika'] },
-        { key: 'calendar', label: 'Calendar (24/7 or shop)', aliases: ['calendar', 'schedule', 'availability', 'shift', 'kalenteri'] },
+        { key: 'calendar', label: 'Calendar (24/7, shop, or a calendar name)', aliases: ['calendar', 'schedule', 'availability', 'shift', 'shifts', 'kalenteri', 'vuorot'] },
         { key: 'notes', label: 'Notes', aliases: ['notes', 'note', 'comment', 'comments', 'remarks', 'huomautus', 'huom'] }
       ]
     },
@@ -182,7 +183,13 @@
         if (M.capacity) o.capacity = Math.max(1, Math.round(U.num(getVal(r, M, 'capacity'), 1)));
         if (M.lotSize) o.lotSize = Math.max(0, U.num(getVal(r, M, 'lotSize'), 1));
         if (M.processHours) o.processHours = Math.max(0, U.num(getVal(r, M, 'processHours'), 0));
-        if (M.calendar) o.calendar = /shop|shift|work|vuoro|työ/i.test(String(getVal(r, M, 'calendar') || '')) ? 'shop' : '24_7';
+        if (M.calendar) {
+          const cv = String(getVal(r, M, 'calendar') || '').trim();
+          const named = cv ? Store.calendarByName(cv) : null;
+          if (named) { o.calendar = 'shop'; o.calendarId = named.id; }
+          else if (!cv || /24|always|continuous|jatkuva/i.test(cv)) { o.calendar = '24_7'; o.calendarId = null; }
+          else { o.calendar = 'shop'; o.calendarId = null; if (!/^(shop|shift|work|vuoro|työ|default)/i.test(cv)) report.errors.push('Row ' + (i + 2) + ': calendar "' + cv + '" not found, using shop calendar'); }
+        }
         if (M.notes) o.notes = getVal(r, M, 'notes') || '';
         if (res) { Object.assign(res, o); report.updated++; }
         else { Store.addResource(Object.assign({ name }, o)); report.added++; }
@@ -237,6 +244,7 @@
         if (M.lotSize) o.lotSize = Math.max(0, U.num(getVal(r, M, 'lotSize'), 0));
         if (M.workerPool) { const res = ensureResource(getVal(r, M, 'workerPool'), 'labor'); o.workerPoolId = res ? res.id : null; }
         if (M.transferPerLot) o.transferPerLot = /^(1|y|yes|true|x|k|kyllä|kylla)$/i.test(String(getVal(r, M, 'transferPerLot') || '').trim());
+        if (M.yieldPct) { let y = U.num(getVal(r, M, 'yieldPct'), 100); if (y > 0 && y <= 1) y *= 100; o.yieldPct = y > 0 ? Math.min(100, y) : 100; }
         if (M.notes) o.notes = getVal(r, M, 'notes') || '';
         if (M.components) {
           o.components = CSV.parseComponents(getVal(r, M, 'components')).map(c => { const p = ensurePart(c.itemNr); return p ? { partId: p.id, qty: c.qty } : null; }).filter(Boolean);
@@ -303,16 +311,16 @@
       output_item_nr: pb[s.outputPartId] ? pb[s.outputPartId].itemNr : '',
       components: (s.components || []).map(c => (pb[c.partId] ? pb[c.partId].itemNr : '?') + ':' + c.qty).join('|'),
       work_minutes: s.workMinutes, workers: s.workers, worker_pool: rb[s.workerPoolId] ? rb[s.workerPoolId].name : '', fixed_minutes: s.fixedMinutes,
-      process_hours: s.processHours, resource: rb[s.resourceId] ? rb[s.resourceId].name : '', lot_size: s.lotSize || '', transfer_per_lot: s.transferPerLot ? 'yes' : 'no',
+      process_hours: s.processHours, resource: rb[s.resourceId] ? rb[s.resourceId].name : '', lot_size: s.lotSize || '', transfer_per_lot: s.transferPerLot ? 'yes' : 'no', yield_pct: s.yieldPct == null ? 100 : s.yieldPct,
       predecessors: (s.extraPreds || []).map(id => { const t = rc.steps.find(x => x.id === id); return t ? t.nr : ''; }).filter(Boolean).join(';'),
       notes: s.notes || ''
     })));
-    return U.toCSV(rows, ['recipe', 'step_nr', 'step_name', 'step_type', 'output_item_nr', 'components', 'work_minutes', 'workers', 'worker_pool', 'fixed_minutes', 'process_hours', 'resource', 'lot_size', 'transfer_per_lot', 'predecessors', 'notes'].map(k => ({ key: k })), delim);
+    return U.toCSV(rows, ['recipe', 'step_nr', 'step_name', 'step_type', 'output_item_nr', 'components', 'work_minutes', 'workers', 'worker_pool', 'fixed_minutes', 'process_hours', 'resource', 'lot_size', 'transfer_per_lot', 'yield_pct', 'predecessors', 'notes'].map(k => ({ key: k })), delim);
   };
   CSV.exportResources = function (delim) {
     return U.toCSV(Store.state.resources || [], [
       { key: 'name' }, { key: 'type' }, { key: 'capacity' }, { key: 'lotSize', label: 'lot_size' }, { key: 'processHours', label: 'process_hours' },
-      { key: 'calendar', get: r => r.calendar === 'shop' ? 'shop' : '24/7' }, { key: 'notes' }
+      { key: 'calendar', get: r => { if (r.type === 'labor' || r.calendar === 'shop') { const c = (Store.state.calendars || []).find(x => x.id === r.calendarId); return c ? c.name : 'shop'; } return '24/7'; } }, { key: 'notes' }
     ], delim);
   };
   CSV.exportBOM = function (recipes, delim) {

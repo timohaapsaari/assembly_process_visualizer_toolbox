@@ -58,8 +58,8 @@
       '<label class="f"><span>Recipe (product)</span><select id="pl-recipe">' + st.recipes.map(r => '<option value="' + r.id + '"' + (r.id === p.recipeId ? ' selected' : '') + '>' + UI.esc(r.name) + '</option>').join('') + '</select></label>' +
       '<label class="f"><span>Quantity needed (pcs)</span><input type="number" id="pl-qty" min="1" step="1" value="' + Math.max(1, U.num(p.qty, 1)) + '"></label>' +
       '<label class="f"><span>Delivery date</span><input type="date" id="pl-due" value="' + UI.esc(p.dueDate) + '"></label>' +
-      '<label class="f"><span>Time</span><input type="time" id="pl-duet" value="' + UI.esc(p.dueTime || cal.s.shiftEnd) + '"></label>' +
-      '<label class="f"><span>Earliest start</span><div class="flex"><label class="check"><input type="checkbox" id="pl-now" ' + (p.startNow ? 'checked' : '') + '> now</label><input type="date" id="pl-start" value="' + UI.esc(p.planStartDate) + '" ' + (p.startNow ? 'disabled' : '') + '><input type="time" id="pl-startt" value="' + UI.esc(p.planStartTime || cal.s.shiftStart) + '" ' + (p.startNow ? 'disabled' : '') + '></div></label>' +
+      '<label class="f"><span>Time</span><input type="time" id="pl-duet" value="' + UI.esc(p.dueTime || cal.endHHMM()) + '"></label>' +
+      '<label class="f"><span>Earliest start</span><div class="flex"><label class="check"><input type="checkbox" id="pl-now" ' + (p.startNow ? 'checked' : '') + '> now</label><input type="date" id="pl-start" value="' + UI.esc(p.planStartDate) + '" ' + (p.startNow ? 'disabled' : '') + '><input type="time" id="pl-startt" value="' + UI.esc(p.planStartTime || cal.startHHMM()) + '" ' + (p.startNow ? 'disabled' : '') + '></div></label>' +
       '</div><div class="form-row"><label class="f grow"><span>Notes</span><input type="text" id="pl-notes" style="width:100%" value="' + UI.esc(p.notes || '') + '"></label></div>' +
       '<div class="mt"><div class="flex"><b class="small">Sub-assembly due dates</b><span class="muted small">separate delivery dates for sub-assemblies (e.g. shipped ahead or to another site); optional extra pcs are added to the demand</span><span class="spacer"></span><button class="btn btn-sm" id="ms-add">+ Add sub-assembly due date</button></div><div id="ms-list" class="mt"></div></div></div>');
     host.appendChild(form);
@@ -68,7 +68,7 @@
     form.querySelector('#ms-add').addEventListener('click', () => {
       const r = Store.recipe(p.recipeId); if (!r) { UI.toast('Select a recipe first', 'err'); return; }
       const produced = r.steps.map(x => x.outputPartId).filter(x => x && x !== r.finalPartId);
-      p.milestones.push({ partId: produced[0] || null, dueDate: p.dueDate, dueTime: p.dueTime || cal.s.shiftEnd, qty: 0 });
+      p.milestones.push({ partId: produced[0] || null, dueDate: p.dueDate, dueTime: p.dueTime || cal.endHHMM(), qty: 0 });
       Store.save(); PlanUI.renderMilestones(p, form.querySelector('#ms-list')); PlanUI.compute();
     });
     const recalc = UI.debounce(() => PlanUI.compute(), 150);
@@ -96,7 +96,7 @@
       const row = UI.el('<div class="form-row" style="margin-bottom:6px">' +
         '<label class="f"><span>Sub-assembly</span><select class="ms-part" style="min-width:280px">' + produced.map(pid => '<option value="' + pid + '"' + (pid === m.partId ? ' selected' : '') + '>' + UI.esc((pb[pid] || {}).itemNr + ' – ' + (pb[pid] || {}).name) + (pid === r.finalPartId ? ' (final product)' : '') + '</option>').join('') + '</select></label>' +
         '<label class="f"><span>Due date</span><input type="date" class="ms-date" value="' + UI.esc(m.dueDate || '') + '"></label>' +
-        '<label class="f"><span>Time</span><input type="time" class="ms-time" value="' + UI.esc(m.dueTime || cal.s.shiftEnd) + '"></label>' +
+        '<label class="f"><span>Time</span><input type="time" class="ms-time" value="' + UI.esc(m.dueTime || cal.endHHMM()) + '"></label>' +
         '<label class="f"><span>Extra pcs delivered separately</span><input type="number" class="ms-qty" min="0" step="1" value="' + U.num(m.qty) + '"></label>' +
         '<button class="btn btn-icon btn-danger" title="Remove" style="align-self:flex-end;margin-bottom:2px">✕</button></div>');
       const recalc = () => { Store.save(); PlanUI.compute(); };
@@ -114,14 +114,14 @@
     const r = Store.recipe(p.recipeId);
     if (!r) { out.innerHTML = '<div class="alert warn">Select a recipe.</div>'; return; }
     const cal = Store.calendar();
-    const due = U.parseLocal(p.dueDate + ' ' + (p.dueTime || cal.s.shiftEnd));
+    const due = U.parseLocal(p.dueDate + ' ' + (p.dueTime || cal.endHHMM()));
     if (!due) { out.innerHTML = '<div class="alert warn">Enter a delivery date.</div>'; return; }
-    let planStart = p.startNow ? new Date() : U.parseLocal(p.planStartDate + ' ' + (p.planStartTime || cal.s.shiftStart));
+    let planStart = p.startNow ? new Date() : U.parseLocal(p.planStartDate + ' ' + (p.planStartTime || cal.startHHMM()));
     if (!planStart) planStart = new Date();
     planStart = cal.snapForward(planStart);
     const pb = Store.partsById();
-    const milestones = (p.milestones || []).map(m => ({ partId: m.partId, due: U.parseLocal((m.dueDate || '') + ' ' + (m.dueTime || cal.s.shiftEnd)), qty: m.qty })).filter(m => m.partId && m.due);
-    const res = Scheduler.schedule({ recipe: r, partsById: pb, resourcesById: Store.resourcesById(), qty: p.qty, due, planStart, calendar: cal, milestones });
+    const milestones = (p.milestones || []).map(m => ({ partId: m.partId, due: U.parseLocal((m.dueDate || '') + ' ' + (m.dueTime || cal.endHHMM())), qty: m.qty })).filter(m => m.partId && m.due);
+    const res = Scheduler.schedule({ recipe: r, partsById: pb, resourcesById: Store.resourcesById(), calendarsById: Store.calendarsById(), qty: p.qty, due, planStart, calendar: cal, milestones });
     PlanUI.result = res;
     PlanUI.renderResult(res);
   };
@@ -151,7 +151,7 @@
       '<div class="kpi"><div class="k">Due</div><div class="v">' + U.niceDateTime(res.due) + '</div><div class="s">' + res.qty + ' pcs ' + UI.esc((pb[res.recipe.finalPartId] || {}).itemNr || '') + '</div></div>' +
       '<div class="kpi ' + (res.startsInPast ? 'bad' : '') + '"><div class="k">Latest start (JIT)</div><div class="v">' + U.niceDateTime(res.requiredStart) + '</div><div class="s">' + U.hoursToText(res.totals.leadCalendarHoursJIT) + ' lead time · ' + U.round(res.totals.leadWorkingHoursJIT, 1) + ' working h</div></div>' +
       '<div class="kpi ' + (res.late ? 'bad' : '') + '"><div class="k">Earliest finish (ASAP)</div><div class="v">' + U.niceDateTime(res.projectedFinish) + '</div><div class="s">' + (res.late ? 'late by ' + U.hoursToText(res.lateMinutes / 60) + ' working time' : 'starting ' + U.niceDateTime(res.planStart)) + '</div></div>' +
-      '<div class="kpi"><div class="k">Labor</div><div class="v">' + U.round(res.totals.laborHours, 1) + ' h</div><div class="s">' + U.round(res.totals.laborHours / res.qty, 2) + ' h per pc · ' + U.round(res.totals.cureHours, 1) + ' h cure/wait</div></div>' +
+      '<div class="kpi"><div class="k">Labor</div><div class="v">' + U.round(res.totals.laborHours, 1) + ' h</div><div class="s">' + U.round(res.totals.laborHours / res.qty, 2) + ' h per pc' + (res.totals.scrapUnits ? ' · <span style="color:var(--danger)">' + U.round(res.totals.scrapUnits, 1) + ' pcs expected scrap</span>' : ' · no yield loss') + '</div></div>' +
       '<div class="kpi ' + (overload && overload.length ? 'bad' : '') + '"><div class="k">Peak workers</div><div class="v">' + peak + '</div><div class="s">' + (maxW ? (overload.length ? overload.length + ' day(s) over ' + maxW : 'within ' + maxW + ' available') : 'concurrently, ' + mode.toUpperCase() + ' schedule') + '</div></div>' +
       '<div class="kpi ' + (conflicts.length ? 'bad' : '') + '"><div class="k">Bottleneck resource</div><div class="v" style="font-size:16px">' + (bottleneck ? UI.esc(bottleneck.resource.name) : '–') + '</div><div class="s">' + (bottleneck ? Math.round(bottleneck.utilization * 100) + '% busy over its active days' : 'no equipment assigned') + (conflicts.length ? ' · ' + conflicts.length + ' double-booked' : '') + '</div></div>' +
       '</div>';
@@ -189,7 +189,7 @@
       order.map(x => {
         const s = x.step, o = pb[s.outputPartId];
         const S = mode === 'jit' ? x.LS : x.ES, WE = mode === 'jit' ? x.LworkEnd : x.EworkEnd, F = mode === 'jit' ? x.LF : x.EF;
-        return '<tr class="' + (x.critical ? 'critical' : '') + (PlanUI.selectedStepId === s.id ? ' selected' : '') + '" data-id="' + s.id + '"><td><b>' + UI.esc(s.nr) + '</b> ' + UI.esc(s.name) + '</td><td>' + UI.typeBadge(s.type) + '</td><td class="mono">' + (o ? UI.esc(o.itemNr) : '') + '</td><td class="num">' + U.round(x.units, 2) + '</td><td class="small">' + (x.resource ? UI.esc(x.resource.name) + '<br>' : '') + (x.nLots > 1 ? x.nLots + ' lots' + (x.waves > 1 ? ' / ' + x.waves + ' waves' : '') + (x.transfer ? ' ⇢' : '') : (x.resource ? '1 lot' : '')) + '</td><td class="num">' + x.workers + (x.pool ? '<br><span class="small muted">' + UI.esc(x.pool.name) + '</span>' : '') + '</td><td class="num nowrap">' + U.minutesToText(x.workMinutes) + '</td><td class="num nowrap">' + (x.processHours ? U.hoursToText(x.processHours) + (x.nLots > 1 ? ' / lot' : '') : '–') + '</td><td class="nowrap">' + U.niceDateTime(S) + '</td><td class="nowrap">' + U.niceDateTime(WE) + '</td><td class="nowrap">' + U.niceDateTime(F) + '</td><td class="num nowrap">' + (x.critical ? '<span class="badge err">critical</span>' : U.hoursToText(x.floatMinutes / 60)) + '</td><td class="small muted">' + x.preds.map(id => res.rows[id].step.nr).join(', ') + '</td></tr>';
+        return '<tr class="' + (x.critical ? 'critical' : '') + (PlanUI.selectedStepId === s.id ? ' selected' : '') + '" data-id="' + s.id + '"><td><b>' + UI.esc(s.nr) + '</b> ' + UI.esc(s.name) + '</td><td>' + UI.typeBadge(s.type) + '</td><td class="mono">' + (o ? UI.esc(o.itemNr) : '') + '</td><td class="num">' + U.round(x.units, 2) + (x.yield < 1 ? '<br><span class="small" style="color:var(--danger)">' + Math.round(x.yield * 100) + '% → ' + U.round(x.good, 1) + '</span>' : '') + '</td><td class="small">' + (x.resource ? UI.esc(x.resource.name) + '<br>' : '') + (x.nLots > 1 ? x.nLots + ' lots' + (x.waves > 1 ? ' / ' + x.waves + ' waves' : '') + (x.transfer ? ' ⇢' : '') : (x.resource ? '1 lot' : '')) + '</td><td class="num">' + x.workers + (x.pool ? '<br><span class="small muted">' + UI.esc(x.pool.name) + '</span>' : '') + '</td><td class="num nowrap">' + U.minutesToText(x.workMinutes) + '</td><td class="num nowrap">' + (x.processHours ? U.hoursToText(x.processHours) + (x.nLots > 1 ? ' / lot' : '') : '–') + '</td><td class="nowrap">' + U.niceDateTime(S) + '</td><td class="nowrap">' + U.niceDateTime(WE) + '</td><td class="nowrap">' + U.niceDateTime(F) + '</td><td class="num nowrap">' + (x.critical ? '<span class="badge err">critical</span>' : U.hoursToText(x.floatMinutes / 60)) + '</td><td class="small muted">' + x.preds.map(id => res.rows[id].step.nr).join(', ') + '</td></tr>';
       }).join('') + '</tbody></table></div></div>';
 
     // materials
@@ -227,7 +227,7 @@
     const s = x.step, o = pb[s.outputPartId];
     const S = mode === 'jit' ? x.LS : x.ES, WE = mode === 'jit' ? x.LworkEnd : x.EworkEnd, F = mode === 'jit' ? x.LF : x.EF;
     return '<b>' + UI.esc(s.nr + ' ' + s.name) + '</b>' + (x.critical ? ' <span style="color:#fca5a5">critical</span>' : '') + '<br>' + Scheduler.typeInfo(s.type).label + (o ? ' → ' + UI.esc(o.itemNr) + ' ' + UI.esc(o.name) : '') +
-      '<br>' + U.round(x.units, 2) + ' units · ' + x.workers + ' worker(s)' + (x.pool ? ' from ' + UI.esc(x.pool.name) : '') + ' · ' + U.round(x.laborHours, 1) + ' labor h' +
+      '<br>' + U.round(x.units, 2) + ' units' + (x.yield < 1 ? ' started, yield ' + Math.round(x.yield * 100) + '% → ' + U.round(x.good, 1) + ' good' : '') + ' · ' + x.workers + ' worker(s)' + (x.pool ? ' from ' + UI.esc(x.pool.name) + (x.pool.calendarId ? ' (own shift calendar)' : '') : '') + ' · ' + U.round(x.laborHours, 1) + ' labor h' +
       (x.resource ? '<br>On ' + UI.esc(x.resource.name) + ': ' + x.nLots + ' lot(s) of ≤' + (x.lotSize || x.units) + ' pcs, ' + x.resource.capacity + ' at a time → ' + x.waves + ' wave(s)' + (x.transfer ? ', next step per lot' : '') : (x.nLots > 1 ? '<br>' + x.nLots + ' lots of ' + x.lotSize + (x.transfer ? ', next step per lot' : '') : '')) +
       '<br>Work: ' + U.niceDateTime(S) + ' → ' + U.niceDateTime(WE) + ' (' + U.minutesToText(x.workMinutes) + ' attended)' +
       (x.processHours ? '<br>Process: ' + U.hoursToText(x.processHours) + ' per lot (' + (x.procCal === 'shop' ? 'shop hours' : '24/7') + ') → last lot done ' + U.niceDateTime(F) : '') +
@@ -310,7 +310,7 @@
       bars += '<rect x="' + X(S) + '" y="' + (by + 3) + '" width="' + Math.max(1, X(F) - X(S)) + '" height="' + (bh - 6) + '" fill="' + col + '" opacity="0.15" rx="2"/>';
       const many = lots.length > 1;
       lots.forEach(l => {
-        if (l.attEnd > l.attStart) Scheduler.workSegments(cal, l.attStart, l.attEnd).forEach(seg => { bars += '<rect x="' + X(seg.a) + '" y="' + by + '" width="' + Math.max(1.5, X(seg.b) - X(seg.a)) + '" height="' + bh + '" fill="' + col + '" rx="2"/>'; });
+        if (l.attEnd > l.attStart) Scheduler.workSegments(x.workCal || cal, l.attStart, l.attEnd).forEach(seg => { bars += '<rect x="' + X(seg.a) + '" y="' + by + '" width="' + Math.max(1.5, X(seg.b) - X(seg.a)) + '" height="' + bh + '" fill="' + col + '" rx="2"/>'; });
         else bars += '<rect x="' + (X(l.attStart) - 1) + '" y="' + by + '" width="2" height="' + bh + '" fill="' + col + '"/>';
         if (l.procEnd > l.attEnd) bars += '<rect x="' + X(l.attEnd) + '" y="' + (by + 2) + '" width="' + Math.max(1, X(l.procEnd) - X(l.attEnd)) + '" height="' + (bh - 4) + '" fill="url(#cureHatch)" stroke="#c46a1c" stroke-width="0.5" opacity="' + (many ? 0.55 : 1) + '" rx="2"/>';
       });
