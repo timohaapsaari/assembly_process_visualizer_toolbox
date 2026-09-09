@@ -320,6 +320,15 @@
       if (isLink) { card.querySelector('.summary').innerHTML = '<span class="muted">Link step: no work of its own. Lead time and labor come from the linked recipe.</span>'; }
       else card.querySelector('.summary').innerHTML = 'Per product: <b>' + U.minutesToText(wm) + '</b> attended work' + (U.num(s.workers, 1) > 1 ? ' with ' + s.workers + ' workers' : '') + ' (' + U.round(Scheduler.stepLaborHours(s, units, res), 2) + ' labor h)' + (U.num(s.processHours) ? ' + <b style="color:var(--cure)">' + U.hoursToText(U.num(s.processHours)) + ' process per lot</b>' : '') + (units !== 1 && Scheduler.yieldOf(s) >= 1 ? ' · ' + units + ' units per product' : '') + yTxt + lotTxt + per10;
       const outId = rs.outputPartId;
+      // lot hint: predecessor hands over per lot but this step has no lot size -> it would wait for the whole batch
+      const lotHint = card.querySelector('.lot-hint') || (() => { const el = UI.el('<div class="small mt lot-hint"></div>'); card.querySelector('.summary').before(el); return el; })();
+      const lotPreds = preds.filter(p => p.transferPerLot && (Scheduler.lotting(p, rb[p.resourceId]).lotSize > 0));
+      if (lotPreds.length && !Scheduler.lotting(s, res).lotSize) {
+        lotHint.innerHTML = '<span class="badge warn">waits for the whole batch</span> <span class="muted">step ' + lotPreds.map(p => p.nr).join(', ') + ' hands over per lot; set a lot size here (e.g. 1) so this step starts as soon as enough pieces are ready. Fixed time per lot then counts once per lot.</span>';
+      } else if (lotPreds.length) {
+        const need = (s.components || []).filter(c => lotPreds.some(p => g.byId[p.id].outputPartId === c.partId)).map(c => U.num(c.qty, 1) * Scheduler.lotting(s, res).lotSize);
+        lotHint.innerHTML = '<span class="badge ok">starts per lot</span> <span class="muted">first lot starts when ' + (need.length ? need.map(n => U.round(n, 2)).join(' / ') + ' pcs from step ' + lotPreds.map(p => p.nr).join(', ') + ' are' : 'the first lot of step ' + lotPreds.map(p => p.nr).join(', ') + ' is') + ' done</span>';
+      } else lotHint.innerHTML = '';
       const ciEl = card.querySelector('.chain-info');
       if (ciEl && s.outputPartId && !(s.components || []).length && !s.continuesPrevious) {
         const maker = Store.state.recipes.find(x => x.id !== r.id && (x.finalPartId === s.outputPartId || (!x.finalPartId && Scheduler.recipeFinalPart(x) === s.outputPartId)));

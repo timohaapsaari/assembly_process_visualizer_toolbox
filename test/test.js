@@ -443,4 +443,27 @@ t('placeholder step producing an item without components chains the recipe that 
   assert.ok(!res.warnings.length, JSON.stringify(res.warnings));
   assert.strictEqual(rMain.steps[1].components.length, 0);      // original untouched
 });
+
+t('successor starts when enough pieces exist: lots of 50, 162 total, 27 per unit', () => {
+  const partsC = Object.assign({}, parts, { sa: { id: 'sa', itemNr: 'SA', name: 'Sub-assembly', type: 'manufactured' } });
+  const r13 = { id: 'r13', name: 'Lots', finalPartId: 'fin', steps: [
+    { id: 'sub', nr: 10, name: 'Sub-assembly', type: 'subassembly', outputPartId: 'sa', components: [{ partId: 'seal', qty: 1 }], workMinutes: 2, workers: 2, fixedMinutes: 10, lotSize: 50, transferPerLot: true },
+    { id: 'fin', nr: 20, name: 'Final assembly', type: 'assembly', outputPartId: 'fin', components: [{ partId: 'sa', qty: 27 }], workMinutes: 60, workers: 1, lotSize: 1 }
+  ] };
+  const res = S.schedule({ recipe: r13, partsById: partsC, qty: 6, due: new Date(2026, 9, 30, 15, 30), planStart: mon, calendar: cal });
+  const sub = res.rows.sub, fin = res.rows.fin;
+  assert.strictEqual(sub.units, 162);
+  assert.deepStrictEqual(sub.lotsE.map(l => l.units), [50, 50, 50, 12]);
+  assert.strictEqual(fin.nLots, 6);
+  // final unit 1 needs 27 -> after sub lot 1; unit 2 needs 54 -> after lot 2; unit 4 needs 108 -> after lot 3; unit 6 needs 162 -> after lot 4
+  assert.ok(fin.lotsE[0].attStart >= sub.lotsE[0].procEnd && fin.lotsE[0].attStart < sub.lotsE[1].procEnd);
+  assert.ok(fin.lotsE[1].attStart >= sub.lotsE[1].procEnd);
+  assert.ok(fin.lotsE[3].attStart >= sub.lotsE[2].procEnd);
+  assert.ok(fin.lotsE[5].attStart >= sub.lotsE[3].procEnd);
+  // without a lot size on the successor it waits for all 162
+  const r14 = JSON.parse(JSON.stringify(r13)); r14.steps[1].lotSize = 0;
+  const res2 = S.schedule({ recipe: r14, partsById: partsC, qty: 6, due: new Date(2026, 9, 30, 15, 30), planStart: mon, calendar: cal });
+  assert.ok(res2.rows.fin.ES >= res2.rows.sub.EF);
+  assert.ok(res.rows.fin.ES < res2.rows.fin.ES);
+});
 console.log('\n' + passed + ' tests passed' + (process.exitCode ? ', some FAILED' : ''));
