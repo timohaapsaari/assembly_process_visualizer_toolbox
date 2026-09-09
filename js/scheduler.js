@@ -184,6 +184,7 @@
     const deliverables = (recipe.deliverables || []).filter(d => d.partId && U.num(d.qtyPerProduct) > 0);
     deliverables.forEach(d => { demand[d.partId] = (demand[d.partId] || 0) + qty * U.num(d.qtyPerProduct); });
     const isDeliverable = pid => pid === finalId || deliverables.some(d => d.partId === pid);
+    deliverables.forEach(d => { if (!(graph.producers[d.partId] || []).length) warnings.push({ level: 'warn', text: 'Delivered separately: ' + ((partsById[d.partId] || {}).itemNr || d.partId) + ' is not produced by any step or chained recipe, so it is treated as a purchased part.' }); });
     (extraDemand || []).forEach(e => { if (e.partId && U.num(e.qty) > 0) demand[e.partId] = (demand[e.partId] || 0) + U.num(e.qty); });
 
     const producedParts = new Set(Object.keys(graph.producers));
@@ -252,19 +253,21 @@
     while (changed) {
       changed = false;
       const produced = new Set(S.resolveRecipe({ id: recipe.id, steps }).steps.map(s => s.outputPartId).filter(Boolean));
-      for (const s of steps) {
-        for (const c of (s.components || [])) {
-          if (produced.has(c.partId)) continue;
-          const sub = (allRecipes || []).find(r => !visited.has(r.id) && r.finalPartId === c.partId && r.id !== recipe.id);
-          if (!sub) continue;
-          visited.add(sub.id);
-          const code = makeCode(sub.name);
-          subRecipes.push({ recipe: sub, code, partId: c.partId });
-          clone(sub, code).forEach(x => steps.push(x));
-          produced.add(c.partId);
-          changed = true;
-        }
-        if (changed) break;
+      // parts needed: step components plus items delivered separately
+      const needed = [];
+      steps.forEach(s => (s.components || []).forEach(c => needed.push(c.partId)));
+      (recipe.deliverables || []).forEach(d => needed.push(d.partId));
+      for (const pid of needed) {
+        if (!pid || produced.has(pid)) continue;
+        const sub = (allRecipes || []).find(r => !visited.has(r.id) && r.finalPartId === pid && r.id !== recipe.id);
+        if (!sub) continue;
+        visited.add(sub.id);
+        const code = makeCode(sub.name);
+        subRecipes.push({ recipe: sub, code, partId: pid });
+        clone(sub, code).forEach(x => steps.push(x));
+        produced.add(pid);
+        changed = true;
+        break;
       }
     }
     return Object.assign({}, recipe, { steps, subRecipes, expanded: subRecipes.length > 0 });

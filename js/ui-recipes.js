@@ -366,9 +366,13 @@
       chip.querySelector('.x').addEventListener('click', () => { Store.setDeliverable(r, d.partId, 0); Store.save(); RecipesUI.render(); });
       host.appendChild(chip);
     });
-    const produced = Array.from(new Set(Scheduler.resolveRecipe(r).steps.map(s => s.outputPartId).filter(pid => pid && pid !== r.finalPartId && !(r.deliverables || []).some(d => d.partId === pid))));
-    if (produced.length) {
-      const sel = UI.el('<select><option value="">+ add item delivered separately…</option>' + produced.map(pid => '<option value="' + pid + '">' + UI.esc((pb[pid] || {}).itemNr + ' – ' + (pb[pid] || {}).name) + '</option>').join('') + '</select>');
+    const taken = pid => pid === r.finalPartId || (r.deliverables || []).some(d => d.partId === pid);
+    const produced = Array.from(new Set(Scheduler.resolveRecipe(r).steps.map(s => s.outputPartId).filter(pid => pid && !taken(pid))));
+    const fromOthers = Store.state.recipes.filter(x => x.id !== r.id && x.finalPartId && !taken(x.finalPartId) && produced.indexOf(x.finalPartId) < 0);
+    if (produced.length || fromOthers.length) {
+      const sel = UI.el('<select><option value="">+ add item delivered separately…</option>' +
+        (produced.length ? '<optgroup label="Made in this recipe">' + produced.map(pid => '<option value="' + pid + '">' + UI.esc((pb[pid] || {}).itemNr + ' – ' + (pb[pid] || {}).name) + '</option>').join('') + '</optgroup>' : '') +
+        (fromOthers.length ? '<optgroup label="Final product of another recipe (chained in)">' + fromOthers.map(x => '<option value="' + x.finalPartId + '">' + UI.esc((pb[x.finalPartId] || {}).itemNr + ' – ' + (pb[x.finalPartId] || {}).name + '  [' + x.name + ']') + '</option>').join('') + '</optgroup>' : '') + '</select>');
       sel.addEventListener('change', () => { if (sel.value) { Store.setDeliverable(r, sel.value, 1); Store.save(); RecipesUI.render(); } });
       host.appendChild(sel);
     } else if (!(r.deliverables || []).length) host.appendChild(UI.el('<span class="muted small">none</span>'));

@@ -386,4 +386,24 @@ t('chained sub-recipe with a continues chain resolves inside its own recipe', ()
   assert.strictEqual(res.rows['ra2:h1'].units, 4);
   assert.strictEqual(res.rows['ra2:h1'].step.outputPartId, 'a2');
 });
+
+t('deliverable that is another recipe\'s final product is chained in with its quantity', () => {
+  const partsC = Object.assign({}, parts, { sa: { id: 'sa', itemNr: 'SA-1', name: 'Sub-assembly, loose', type: 'manufactured' } });
+  const rMain = { id: 'rm', name: 'Main', finalPartId: 'fin', deliverables: [{ partId: 'sa', qtyPerProduct: 6 }], steps: [
+    { id: 'm1', nr: 10, name: 'Final assembly', type: 'assembly', outputPartId: 'fin', components: [{ partId: 'hous', qty: 1 }], workMinutes: 60, workers: 1 }] };
+  const rSA = { id: 'rs', name: 'Sub-assembly', finalPartId: 'sa', steps: [
+    { id: 's1', nr: 10, name: 'Build', type: 'subassembly', outputPartId: null, components: [{ partId: 'seal', qty: 3 }], workMinutes: 10, workers: 1 },
+    { id: 's2', nr: 20, name: 'Test', type: 'test', outputPartId: 'sa', components: [], continuesPrevious: true, workMinutes: 5, workers: 1 }] };
+  const rx = S.expandRecipe(rMain, [rMain, rSA], partsC);
+  assert.strictEqual(rx.steps.length, 3);
+  const res = S.schedule({ recipe: rx, partsById: partsC, qty: 2, due: fri, planStart: mon, calendar: cal });
+  assert.strictEqual(res.rows['rs:s1'].units, 12);
+  assert.strictEqual(res.purchases.find(p => p.partId === 'seal').qty, 36);
+  assert.ok(!res.purchases.some(p => p.partId === 'sa'));
+  assert.ok(!res.warnings.length, JSON.stringify(res.warnings));
+  // without the sub-recipe: warned and treated as purchased
+  const res2 = S.schedule({ recipe: S.expandRecipe(rMain, [rMain], partsC), partsById: partsC, qty: 2, due: fri, planStart: mon, calendar: cal });
+  assert.ok(res2.warnings.some(w => /not produced by any step or chained recipe/.test(w.text)));
+  assert.strictEqual(res2.purchases.find(p => p.partId === 'sa').qty, 12);
+});
 console.log('\n' + passed + ' tests passed' + (process.exitCode ? ', some FAILED' : ''));
