@@ -24,17 +24,21 @@
     box.querySelector('#fr-empty').addEventListener('click', () => { Store.save(); UI.closeModal(); App.showTab('settings'); UI.toast('Empty workspace. Start with the calendar, then Resources and Parts.', 'ok', 5000); });
   };
 
-  /** Old demo / test data still in this browser: offer to clear it once. */
+  /** Old demo / test data still in this browser: offer once to remove just the demo objects. */
   App.offerCleanup = function () {
     const st = Store.state;
     if (st.settings.cleanupOffered) return;
-    const looksLikeDemo = st.recipes.some(r => /HA-200/i.test(r.name)) || st.plans.some(p => /Order 4711/i.test(p.name)) || st.parts.some(p => p.itemNr === 'F-4001' && /HA-200/i.test(p.name));
-    if (!looksLikeDemo) { st.settings.cleanupOffered = true; Store.save(); return; }
-    const box = UI.modal('<h2>Old demo data found</h2><p>This browser still holds the demo / test data (' + st.parts.length + ' parts, ' + st.resources.length + ' resources, ' + st.recipes.length + ' recipe(s), ' + st.plans.length + ' plan(s)). Clear it for a fresh start?</p>' +
-      '<p class="muted small">Clearing keeps the shop calendar and holidays. You can download a JSON backup first from Import / Export.</p>' +
-      '<div class="modal-actions"><button class="btn" id="cu-keep">Keep it</button><button class="btn btn-danger" id="cu-clear">Clear all data</button></div>');
+    if (!Store.hasDemoData()) { st.settings.cleanupOffered = true; Store.save(); return; }
+    const ownRecipes = st.recipes.filter(r => !(r.demo || /^HA-200 hydraulic actuator$/i.test(r.name))).length;
+    const box = UI.modal('<h2>Demo data found</h2><p>This browser still holds the demo recipe and plan' + (ownRecipes ? ' next to ' + ownRecipes + ' recipe(s) of your own' : '') + '. Remove the demo objects? Only the demo recipe, its plan, and demo parts, resources and calendars that nothing else uses are removed. Your own data stays.</p>' +
+      '<p class="muted small">A snapshot is taken first (Import / Export → Snapshots) so this can be undone.</p>' +
+      '<div class="modal-actions"><button class="btn" id="cu-keep">Keep everything</button><button class="btn btn-primary" id="cu-clear">Remove demo data</button></div>');
     box.querySelector('#cu-keep').addEventListener('click', () => { st.settings.cleanupOffered = true; Store.save(); UI.closeModal(); });
-    box.querySelector('#cu-clear').addEventListener('click', () => { Store.clearAll(); Store.state.settings.cleanupOffered = true; Store.save(); UI.closeModal(); App.showTab('resources'); UI.toast('Workspace cleared. Start with Calendar, Resources and Parts.', 'ok', 5000); });
+    box.querySelector('#cu-clear').addEventListener('click', () => {
+      const n = Store.removeDemoData(); Store.state.settings.cleanupOffered = true; Store.save(); UI.closeModal();
+      App.showTab(Store.state.recipes.length ? 'recipes' : 'resources');
+      UI.toast('Removed demo: ' + n.recipes + ' recipe, ' + n.plans + ' plan(s), ' + n.parts + ' parts, ' + n.resources + ' resources, ' + n.calendars + ' calendar(s). Undo via Import / Export → Snapshots.', 'ok', 7000);
+    });
   };
 
   App.help = function () {
@@ -62,8 +66,9 @@
     Store.load();
     document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => App.showTab(b.dataset.tab)));
     document.getElementById('btnHelp').addEventListener('click', App.help);
-    if (Store.state.firstRun) { delete Store.state.firstRun; App.firstRun(); }
+    if (Store.state.firstRun) { delete Store.state.firstRun; Store.state.firstRunHandled = true; App.firstRun(); }
     else { App.showTab(Store.state.ui.tab || 'plan'); App.offerCleanup(); }
+    if (root.Backup) root.Backup.init();
     let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if (Store.state.ui.tab === 'plan' && root.PlanUI.result) root.PlanUI.renderResult(root.PlanUI.result); }, 200); });
   });
 

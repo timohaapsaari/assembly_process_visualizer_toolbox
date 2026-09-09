@@ -139,6 +139,7 @@
     const st = Store.state;
     const report = { added: 0, updated: 0, createdParts: [], errors: [], recipes: [] };
     const M = opts.mapping, rows = opts.rows;
+    if (opts.mode === 'replace') Store.snapshot('before CSV import (replace) of ' + opts.dataset);
 
     const ensurePart = (itemNr, extra) => {
       itemNr = String(itemNr || '').trim();

@@ -3,6 +3,8 @@
   'use strict';
   const U = root.U, Calendar = root.Calendar;
   const KEY = 'apv.state.v1';
+  const SNAP_KEY = 'apv.snapshots.v1';
+  const SNAP_MAX = 6;
 
   const Store = {
     state: null,
@@ -63,6 +65,31 @@
       this.listeners.forEach(fn => fn(this.state));
     },
     onChange(fn) { this.listeners.push(fn); },
+
+    /* ---- snapshots (undo for destructive actions) ---- */
+    snapshots() { try { return JSON.parse(localStorage.getItem(SNAP_KEY) || '[]'); } catch (e) { return []; } },
+    /** Save a copy of the current state before a destructive action. */
+    snapshot(label) {
+      try {
+        const st = this.state;
+        if (!st.parts.length && !st.recipes.length && !st.resources.length) return false;
+        const json = JSON.stringify({ parts: st.parts, resources: st.resources, calendars: st.calendars, recipes: st.recipes, plans: st.plans, settings: st.settings });
+        if (json.length > 3000000) return false;
+        const list = this.snapshots();
+        list.unshift({ t: new Date().toISOString(), label: label || 'snapshot', parts: st.parts.length, recipes: st.recipes.length, plans: st.plans.length, json });
+        while (list.length > SNAP_MAX) list.pop();
+        localStorage.setItem(SNAP_KEY, JSON.stringify(list));
+        return true;
+      } catch (e) { console.warn('snapshot failed', e); return false; }
+    },
+    restoreSnapshot(index) {
+      const snap = this.snapshots()[index]; if (!snap) throw new Error('Snapshot not found');
+      this.snapshot('before restoring "' + snap.label + '"');
+      const obj = JSON.parse(snap.json);
+      this.state = Object.assign(this.blank(), { parts: obj.parts || [], resources: obj.resources || [], calendars: obj.calendars || [], recipes: obj.recipes || [], plans: obj.plans || [], settings: Object.assign({}, Calendar.DEFAULTS, obj.settings || {}) });
+      this.migrate();
+    },
+    deleteSnapshot(index) { const l = this.snapshots(); l.splice(index, 1); localStorage.setItem(SNAP_KEY, JSON.stringify(l)); },
 
     calendar() { return new Calendar(this.state.settings); },
     /** Calendar for a named calendar id (null / unknown = shop calendar). Holidays are shared. */
@@ -205,6 +232,7 @@
     exportJSON() { return JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), parts: this.state.parts, resources: this.state.resources, calendars: this.state.calendars, recipes: this.state.recipes, plans: this.state.plans, settings: this.state.settings }, null, 2); },
     importJSON(obj, mode) {
       if (!obj || !Array.isArray(obj.parts)) throw new Error('Not a valid backup file (missing parts array).');
+      this.snapshot(mode === 'replace' ? 'before restoring a backup (replace)' : 'before merging a backup');
       if (mode === 'replace') {
         this.state.parts = obj.parts || []; this.state.resources = obj.resources || []; this.state.calendars = obj.calendars || []; this.state.recipes = obj.recipes || []; this.state.plans = obj.plans || [];
         if (obj.settings) this.state.settings = Object.assign({}, Calendar.DEFAULTS, obj.settings);
@@ -241,9 +269,40 @@
 
     /** Empty workspace. Keeps the shop calendar and holidays; everything else is removed. */
     clearAll() {
+      this.snapshot('before clear all data');
       const keep = Object.assign({}, this.state.settings, { defaultsByType: {}, stdResourcesSeeded: true });
       this.state = this.blank();
       this.state.settings = keep;
+    },
+    /** Does the workspace still contain demo objects? */
+    hasDemoData() {
+      const st = this.state;
+      return st.recipes.some(r => r.demo || /^HA-200 hydraulic actuator$/i.test(r.name)) || st.plans.some(p => p.demo || /^Order 4711/i.test(p.name));
+    },
+    /**
+     * Remove only the demo objects: the demo recipe and plan, then demo parts, resources and calendars that are no
+     * longer used by anything. User-entered data is left untouched. Returns counts.
+     */
+    removeDemoData() {
+      this.snapshot('before removing demo data');
+      const st = this.state;
+      const DEMO_NRS = /^(P-10(01|02|03|10|20|30|40)|P-20(01|02|03|04)|P-90(01|02|10)|S-300[1-4]|F-400[01])$/;
+      const DEMO_RES = /^(Assembly workers|Test workers|Test chambers|Curing chambers|Bonding fixtures|Potting rack|Sensor test rig|Pressure test bench|Burn-in cabinet|Assemblers|Test technicians)$/i;
+      const n = { recipes: 0, plans: 0, parts: 0, resources: 0, calendars: 0 };
+      const isDemoRecipe = r => r.demo || /^HA-200 hydraulic actuator$/i.test(r.name);
+      st.recipes = st.recipes.filter(r => { if (isDemoRecipe(r)) { n.recipes++; return false; } return true; });
+      st.plans = st.plans.filter(p => { if (p.demo || /^Order 4711/i.test(p.name) || !st.recipes.some(r => r.id === p.recipeId)) { n.plans++; return false; } return true; });
+      const usedParts = new Set(), usedRes = new Set();
+      st.recipes.forEach(r => { if (r.finalPartId) usedParts.add(r.finalPartId); r.steps.forEach(s => { if (s.outputPartId) usedParts.add(s.outputPartId); (s.components || []).forEach(c => usedParts.add(c.partId)); if (s.resourceId) usedRes.add(s.resourceId); if (s.workerPoolId) usedRes.add(s.workerPoolId); }); });
+      st.parts = st.parts.filter(p => { if ((p.demo || DEMO_NRS.test(p.itemNr)) && !usedParts.has(p.id)) { n.parts++; return false; } return true; });
+      st.resources = st.resources.filter(r => { if ((r.demo || DEMO_RES.test(r.name)) && !usedRes.has(r.id)) { n.resources++; return false; } return true; });
+      const usedCal = new Set(st.resources.map(r => r.calendarId).filter(Boolean));
+      st.calendars = st.calendars.filter(c => { if ((c.demo || /^Two shifts \(test dept\.\)$/i.test(c.name)) && !usedCal.has(c.id)) { n.calendars++; return false; } return true; });
+      const rb = this.resourcesById(); const d = st.settings.defaultsByType || {};
+      Object.keys(d).forEach(t => { if (d[t].poolId && !rb[d[t].poolId]) d[t].poolId = null; if (d[t].resourceId && !rb[d[t].resourceId]) d[t].resourceId = null; });
+      if (!st.recipes.some(r => r.id === st.ui.recipeId)) st.ui.recipeId = st.recipes.length ? st.recipes[0].id : null;
+      if (!st.plans.some(p => p.id === st.ui.planId)) st.ui.planId = st.plans.length ? st.plans[0].id : null;
+      return n;
     },
     /** Resources usable as process equipment / worker pools. */
     equipment() { return (this.state.resources || []).filter(r => r.type !== 'labor'); },
@@ -252,7 +311,7 @@
     /* ---- demo ---- */
     loadDemo() {
       const st = this.state;
-      const P = (itemNr, name, type, o) => { const p = this.addPart(Object.assign({ itemNr, name, type }, o || {})); return p.id; };
+      const P = (itemNr, name, type, o) => { const p = this.addPart(Object.assign({ itemNr, name, type, demo: true }, o || {})); return p.id; };
       const hous = P('P-1001', 'Cylinder housing, machined', 'purchased', { leadTimeDays: 21, workMinutes: 0 });
       const rod = P('P-1002', 'Piston rod, chromed', 'purchased', { leadTimeDays: 14 });
       const pist = P('P-1003', 'Piston', 'purchased', { leadTimeDays: 10 });
@@ -274,8 +333,8 @@
       const act = P('F-4000', 'Hydraulic actuator HA-200', 'manufactured', { workMinutes: 60 });
       const actT = P('F-4001', 'Hydraulic actuator HA-200, tested & packed', 'manufactured');
 
-      const R = (o) => this.addResource(o).id;
-      const twoShift = this.addCalendar({ name: 'Two shifts (test dept.)', shifts: [
+      const R = (o) => this.addResource(Object.assign({ demo: true }, o)).id;
+      const twoShift = this.addCalendar({ name: 'Two shifts (test dept.)', demo: true, shifts: [
         { days: [1, 2, 3, 4, 5], start: '07:00', end: '15:30', breakStart: '11:00', breakMinutes: 30 },
         { days: [1, 2, 3, 4], start: '15:30', end: '23:00', breakStart: '19:00', breakMinutes: 30 }
       ] }).id;
@@ -290,7 +349,7 @@
       };
       void assemblers; void testers; void testChambers; void cureChambers;
 
-      const r = this.addRecipe({ name: 'HA-200 hydraulic actuator', finalPartId: actT, notes: 'Demo recipe. Resources come from the step-type defaults: bonding steps cure in the curing chambers, test steps run in the test chambers with test workers, everything else uses assembly workers.' });
+      const r = this.addRecipe({ name: 'HA-200 hydraulic actuator', demo: true, finalPartId: actT, notes: 'Demo recipe. Resources come from the step-type defaults: bonding steps cure in the curing chambers, test steps run in the test chambers with test workers, everything else uses assembly workers.' });
       const S = (o) => { const s = this.newStep(o); this.applyDefaults(s, false); r.steps.push(s); return s.id; };
       const s10 = S({ nr: 10, name: 'Bond piston to rod', type: 'bonding', outputPartId: rodA, components: [{ partId: rod, qty: 1 }, { partId: pist, qty: 1 }, { partId: glue, qty: 0.05 }], workMinutes: 25, workers: 1, fixedMinutes: 5, processHours: 12, transferPerLot: true, notes: 'Adhesive cures 12 h in the curing chamber before handling.' });
       const s20 = S({ nr: 20, name: 'Pot sensor PCB with magnet & cable', type: 'bonding', outputPartId: sensA, components: [{ partId: pcb, qty: 1 }, { partId: magn, qty: 1 }, { partId: cable, qty: 1 }, { partId: potting, qty: 0.1 }], workMinutes: 20, workers: 1, fixedMinutes: 10, processHours: 24, transferPerLot: true, notes: 'Potting cures 24 h in the curing chamber.' });
@@ -302,7 +361,7 @@
       const s80 = S({ nr: 80, name: 'Final inspection & packaging', type: 'packaging', outputPartId: actT, components: [{ partId: act, qty: 1 }, { partId: box, qty: 1 }], workMinutes: 15, workers: 1, fixedMinutes: 0, processHours: 0, extraPreds: [s70] });
       void s10; void s20; void s30; void s40; void s50; void s80;
 
-      const plan = this.newPlan({ name: 'Order 4711 – 12 pcs HA-200', recipeId: r.id, qty: 12 });
+      const plan = this.newPlan({ name: 'Order 4711 – 12 pcs HA-200', recipeId: r.id, qty: 12, demo: true });
       st.plans.push(plan);
       st.ui.recipeId = r.id; st.ui.planId = plan.id;
     }

@@ -23,7 +23,12 @@
       '<div class="flex"><button class="btn" data-exp="parts">Parts CSV</button><button class="btn" data-exp="resources">Resources CSV</button><button class="btn" data-exp="steps">Steps CSV (all recipes)</button><button class="btn" data-exp="bom">BOM lines CSV</button></div>' +
       '<hr style="border:0;border-top:1px solid var(--border);margin:14px 0">' +
       '<div class="flex"><button class="btn btn-primary" id="expJson">Download full backup (JSON)</button><label class="btn">Restore backup (JSON)<input type="file" id="jsonIn" accept=".json,application/json" class="hidden"></label></div>' +
-      '<p class="muted small mt">The JSON backup contains parts, recipes, plans and calendar settings. Restoring merges by item nr / recipe name, or replaces everything if you choose so.</p>' +
+      '<p class="muted small mt">The JSON backup contains parts, resources, calendars, recipes, plans and settings. Restoring merges by item nr / name, or replaces everything if you choose so.</p>' +
+      '<hr style="border:0;border-top:1px solid var(--border);margin:14px 0">' +
+      '<h3>Auto-backup file</h3><p class="muted small">Link a file on your disk or network drive and every change is written to it automatically. Protects against cleared browser storage and lets colleagues restore the same data.</p>' +
+      '<div class="flex"><span id="bk-status" class="small"></span></div><div class="flex mt" id="bk-actions"></div>' +
+      '<hr style="border:0;border-top:1px solid var(--border);margin:14px 0">' +
+      '<h3>Snapshots</h3><p class="muted small">Taken automatically before destructive actions (clear all, delete recipe, replace-imports, demo removal). Restore one to undo.</p><div id="snap-list"></div>' +
       '</div>' +
       '<div class="panel help"><h3>CSV formats</h3>' +
       '<p><b>parts.csv</b> — one row per item: <code>item_nr, name, type (purchased|manufactured), unit, work_minutes, lead_time_days, notes</code></p>' +
@@ -63,8 +68,44 @@
       };
       rd.readAsText(f, 'utf-8'); e.target.value = '';
     });
+    DataUI.refreshBackupStatus();
+    DataUI.renderSnapshots();
     if (DataUI.preselected) { csvText.placeholder = 'Paste ' + DataUI.preselected + ' CSV here or choose a file…'; }
     if (csvText.value.trim()) DataUI.parse();
+  };
+
+  DataUI.refreshBackupStatus = function () {
+    const st = document.getElementById('bk-status'), act = document.getElementById('bk-actions');
+    if (!st || !act || !root.Backup) return;
+    const b = root.Backup, status = b.status();
+    st.innerHTML = (status.state === 'on' ? '<span class="badge ok">on</span> ' : status.state === 'pending' ? '<span class="badge warn">paused</span> ' : status.state === 'unsupported' ? '<span class="badge">n/a</span> ' : '<span class="badge">off</span> ') + UI.esc(status.text);
+    act.innerHTML = '';
+    if (!b.supported) return;
+    const mk = (label, cls, fn) => { const x = UI.el('<button class="btn btn-sm ' + (cls || '') + '">' + label + '</button>'); x.addEventListener('click', async () => { try { await fn(); } catch (e) { if (e && e.name !== 'AbortError') UI.toast(e.message, 'err'); } DataUI.refreshBackupStatus(); }); act.appendChild(x); };
+    if (status.state === 'pending') mk('Resume auto-backup', 'btn-primary', async () => { if (await b.resume()) UI.toast('Auto-backup resumed', 'ok'); });
+    mk(status.state === 'none' ? 'Link a backup file…' : 'Choose another file…', status.state === 'none' ? 'btn-primary' : '', async () => { await b.link(); UI.toast('Backup file linked and written', 'ok'); });
+    if (status.state === 'on') mk('Write now', '', async () => { await b.write(); UI.toast('Backup written', 'ok'); });
+    if (status.state !== 'none') {
+      mk('Restore from file…', '', async () => {
+        if (!(await UI.confirm('Replace all data in this browser with the contents of the backup file?', 'Restore'))) return;
+        const obj = await b.read(); if (!obj) throw new Error('No permission to read the file');
+        Store.importJSON(obj, 'replace'); Store.save(); UI.toast('Restored from backup file', 'ok'); DataUI.render();
+      });
+      mk('Unlink', 'btn-danger', async () => { await b.unlink(); });
+    }
+  };
+
+  DataUI.renderSnapshots = function () {
+    const host = document.getElementById('snap-list'); if (!host) return;
+    const list = Store.snapshots();
+    if (!list.length) { host.innerHTML = '<p class="muted small">No snapshots yet.</p>'; return; }
+    host.innerHTML = '<table class="tbl"><thead><tr><th>When</th><th>Before</th><th class="num">Parts</th><th class="num">Recipes</th><th class="num">Plans</th><th></th></tr></thead><tbody>' +
+      list.map((sn, i) => '<tr><td class="nowrap">' + U.niceDateTime(new Date(sn.t)) + '</td><td>' + UI.esc(sn.label) + '</td><td class="num">' + sn.parts + '</td><td class="num">' + sn.recipes + '</td><td class="num">' + sn.plans + '</td><td class="nowrap"><button class="btn btn-sm" data-restore="' + i + '">Restore</button> <button class="btn btn-icon btn-danger" data-del="' + i + '" title="Delete snapshot">✕</button></td></tr>').join('') + '</tbody></table>';
+    host.querySelectorAll('[data-restore]').forEach(b => b.addEventListener('click', async () => {
+      const sn = list[+b.dataset.restore];
+      if (await UI.confirm('Replace the current data with the snapshot from ' + U.niceDateTime(new Date(sn.t)) + ' (' + sn.label + ')? The current state is snapshotted first.', 'Restore')) { Store.restoreSnapshot(+b.dataset.restore); Store.save(); UI.toast('Snapshot restored', 'ok'); DataUI.render(); }
+    }));
+    host.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => { Store.deleteSnapshot(+b.dataset.del); DataUI.renderSnapshots(); }));
   };
 
   DataUI.template = function (ds) {

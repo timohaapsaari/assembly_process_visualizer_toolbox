@@ -46,7 +46,8 @@
       st.recipes.push(copy); st.ui.recipeId = copy.id; Store.save(); RecipesUI.render();
     });
     top.querySelector('#r-del').addEventListener('click', async () => {
-      if (await UI.confirm('Delete recipe "' + r.name + '" with ' + r.steps.length + ' steps?', 'Delete recipe')) {
+      if (await UI.confirm('Delete recipe "' + r.name + '" with ' + r.steps.length + ' steps? (A snapshot is kept under Import / Export → Snapshots.)', 'Delete recipe')) {
+        Store.snapshot('before deleting recipe "' + r.name + '"');
         st.recipes = st.recipes.filter(x => x.id !== r.id);
         st.plans.forEach(p => { if (p.recipeId === r.id) p.recipeId = null; });
         st.ui.recipeId = st.recipes.length ? st.recipes[0].id : null; Store.save(); RecipesUI.render();
