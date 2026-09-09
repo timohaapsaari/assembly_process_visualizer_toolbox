@@ -303,7 +303,7 @@
       if (ci) {
         const po = rs.outputPartId ? pb[rs.outputPartId] : null;
         ci.innerHTML = !s.outputPartId && rs.outputPartId ? '→ works on <span class="mono">' + UI.esc(po ? po.itemNr : '?') + '</span> ' + UI.esc(po ? po.name.slice(0, 30) : '') + (rs.chainNamedBy != null ? ' (named at step ' + UI.esc(String(rs.chainNamedBy)) + ')' : '') :
-          (!rs.outputPartId ? (rs.chainEndId && rs.chainEndId !== s.id ? '<span class="muted">item comes from the last step of the chain (step ' + UI.esc(String(rs.chainEndNr)) + '), not set yet</span>' : '<span class="badge err">set Produces: ' + (rs.continuesPrevious ? 'this step ends the chain and names its item' : 'the item this step creates') + '</span>') : '');
+          (!rs.outputPartId ? (rs.chainEndId && rs.chainEndId !== s.id ? '<span class="muted">item comes from the last step of the chain (step ' + UI.esc(String(rs.chainEndNr)) + '), not set yet</span>' : '<span class="badge err">set Produces: ' + (rs.continuesPrevious ? 'this step ends the chain and names its item' : 'the item this step creates') + '</span>' + (rs.chainNextNamed != null ? ' <span class="muted">or tick "continues from previous step" on step ' + UI.esc(String(rs.chainNextNamed)) + ' so it works on this chain</span>' : '')) : '');
       }
       const units = ex.units[s.id] || 1;
       const res = rb[s.resourceId];

@@ -86,7 +86,9 @@
         let e = i, j = nextOf(i);
         while (j >= 0 && out[j].continuesPrevious) { e = j; j = nextOf(j); }
         s.chainEndNr = out[e].nr; s.chainEndId = out[e].id;
-        if (e === i) warnings.push({ level: 'error', text: 'Step ' + s.nr + ' "' + s.name + '"' + (s.continuesPrevious ? ' ends a chain that has no item yet: set "Produces" here.' : ': set "Produces" (the item this step creates).') });
+        const nxt = nextOf(e);
+        s.chainNextNamed = nxt >= 0 && !out[nxt].continuesPrevious && out[nxt].outputPartId ? out[nxt].nr : null;
+        if (e === i) warnings.push({ level: 'error', text: 'Step ' + s.nr + ' "' + s.name + '"' + (s.continuesPrevious ? ' ends a chain that has no item yet: set "Produces" here' : ': set "Produces" (the item this step creates)') + (s.chainNextNamed != null ? ', or tick "continues from previous step" on step ' + s.chainNextNamed + ' if that step works on this chain\'s item.' : '.') });
       }
     });
     return Object.assign({}, recipe, { steps: out, _resolved: true, resolveWarnings: warnings });
